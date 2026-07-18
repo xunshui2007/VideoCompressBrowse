@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS 实时监测</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #1a73e8;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            max-width: 1000px;
+            margin: 0 auto 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .card h2 {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .card.full { grid-column: 1 / -1; }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 14px;
+        }
+        .row .label { color: #888; }
+        .row .value { font-weight: 600; font-family: monospace; }
+        .status-ok { color: #4caf50; }
+        .status-warn { color: #ff9800; }
+        .status-err { color: #f44336; }
+        .signal-bar {
+            display: inline-block;
+            width: 60px;
+            height: 12px;
+            background: #eee;
+            border-radius: 2px;
+            vertical-align: middle;
+            overflow: hidden;
+        }
+        .signal-bar .fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+        .gps-status {
+            font-size: 24px;
+            text-align: center;
+            padding: 10px;
+        }
+        #statusText { font-weight: bold; }
+        #map {
+            height: 300px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .history-chart {
+            margin-top: 12px;
+            height: 80px;
+            display: flex;
+            align-items: flex-end;
+            gap: 2px;
+        }
+        .history-bar {
+            flex: 1;
+            min-width: 2px;
+            background: #1a73e8;
+            border-radius: 1px 1px 0 0;
+            opacity: 0.6;
+        }
+        .history-bar:hover { opacity: 1; }
+        .info { text-align: center; color: #999; font-size: 13px; margin-top: 10px; }
+        @media (max-width: 640px) {
+            .dashboard { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <h1>GPS 实时监测</h1>
+
+    <div class="dashboard">
+        <div class="card">
+            <h2>GPS 状态</h2>
+            <div class="gps-status">
+                <div id="gpsStatusText" class="status-warn">等待数据…</div>
+                <div id="gpsProvider" style="font-size:14px;color:#888;margin-top:4px"></div>
+            </div>
+            <div class="row"><span class="label">卫星</span><span class="value" id="satellites">-</span></div>
+        </div>
+
+        <div class="card">
+            <h2>坐标</h2>
+            <div class="row"><span class="label">纬度</span><span class="value" id="latitude">-</span></div>
+            <div class="row"><span class="label">经度</span><span class="value" id="longitude">-</span></div>
+            <div class="row"><span class="label">海拔</span><span class="value" id="altitude">-</span></div>
+            <div class="row"><span class="label">精度</span><span class="value" id="accuracy">-</span></div>
+            <div class="row"><span class="label">速度</span><span class="value" id="speed">-</span></div>
+            <div class="row"><span class="label">方向</span><span class="value" id="bearing">-</span></div>
+        </div>
+
+        <div class="card">
+            <h2>WiFi 信息</h2>
+            <div class="row"><span class="label">SSID</span><span class="value" id="wifi_ssid">-</span></div>
+            <div class="row">
+                <span class="label">信号强度</span>
+                <span class="value">
+                    <span id="wifi_rssi">-</span>
+                    <span class="signal-bar"><span class="fill" id="wifiSignalFill" style="width:0%"></span></span>
+                </span>
+            </div>
+            <div class="row"><span class="label">频率</span><span class="value" id="wifi_freq">-</span></div>
+        </div>
+
+        <div class="card">
+            <h2>连接信息</h2>
+            <div class="row"><span class="label">手机 IP</span><span class="value" id="phone_ip">-</span></div>
+            <div class="row"><span class="label">最后更新</span><span class="value" id="lastUpdate">-</span></div>
+            <div class="row"><span class="label">数据点数</span><span class="value" id="dataCount">0</span></div>
+        </div>
+
+        <div class="card full">
+            <h2>信号强度历史 (最近 100 次)</h2>
+            <div id="signalHistory" class="history-chart"></div>
+        </div>
+    </div>
+
+    <div class="info">打开手机 GPS 测试 App → 输入本机 IP → 点击"开始发送"</div>
+
+    <script>
+        const el = id => document.getElementById(id);
+        const signalHistory = [];
+
+        function updateDisplay(data) {
+            if (!data) return;
+
+            const loc = data.latitude != null;
+            const gpsOk = loc && (data.accuracy == null || data.accuracy < 100);
+
+            el('gpsStatusText').textContent = gpsOk ? '已定位 ✓' : (loc ? '定位中…' : '无信号');
+            el('gpsStatusText').className = gpsOk ? 'status-ok' : (loc ? 'status-warn' : 'status-err');
+            el('gpsProvider').textContent = data.provider ? `来源: ${data.provider}` : '';
+
+            el('satellites').textContent = data.satellites != null ? data.satellites : '-';
+            el('latitude').textContent = data.latitude != null ? `${data.latitude.toFixed(6)}°` : '-';
+            el('longitude').textContent = data.longitude != null ? `${data.longitude.toFixed(6)}°` : '-';
+            el('altitude').textContent = data.altitude != null ? `${data.altitude.toFixed(1)} m` : '-';
+            el('accuracy').textContent = data.accuracy != null ? `${data.accuracy.toFixed(1)} m` : '-';
+            el('speed').textContent = data.speed != null ? `${data.speed.toFixed(1)} m/s` : '-';
+            el('bearing').textContent = data.bearing != null ? `${data.bearing.toFixed(0)}°` : '-';
+
+            el('wifi_ssid').textContent = data.wifi_ssid || '-';
+            if (data.wifi_rssi != null) {
+                const rssi = data.wifi_rssi;
+                const pct = Math.max(0, Math.min(100, (rssi + 100) * 2.5));
+                el('wifi_rssi').textContent = `${rssi} dBm`;
+                el('wifiSignalFill').style.width = `${pct}%`;
+                const color = rssi >= -67 ? '#4caf50' : (rssi >= -80 ? '#ff9800' : '#f44336');
+                el('wifiSignalFill').style.background = color;
+            }
+            el('wifi_freq').textContent = data.wifi_frequency ? `${data.wifi_frequency} MHz` : '-';
+
+            el('phone_ip').textContent = data.phone_ip || '-';
+            if (data.received_at) {
+                const d = new Date(data.received_at);
+                el('lastUpdate').textContent = d.toLocaleTimeString();
+            }
+
+            if (data.wifi_rssi != null) {
+                signalHistory.push(data.wifi_rssi);
+                if (signalHistory.length > 100) signalHistory.shift();
+                renderSignalHistory();
+            }
+        }
+
+        function renderSignalHistory() {
+            const container = el('signalHistory');
+            if (signalHistory.length === 0) { container.innerHTML = ''; return; }
+            const min = -100, max = -30;
+            container.innerHTML = signalHistory.map(v => {
+                const h = Math.max(5, ((v - min) / (max - min)) * 100);
+                const color = v >= -67 ? '#4caf50' : (v >= -80 ? '#ff9800' : '#f44336');
+                return `<div class="history-bar" style="height:${h}%;background:${color}" title="${v} dBm"></div>`;
+            }).join('');
+        }
+
+        let prevCount = 0;
+        async function fetchLatest() {
+            try {
+                const r = await fetch('/api/latest');
+                const j = await r.json();
+                if (j.data) updateDisplay(j.data);
+                if (j.data && j.data.received_at) {
+                    const count = await fetch('/api/history?count=1').then(r => r.json());
+                    if (count.data) {
+                        el('dataCount').textContent = count.data.length;
+                    }
+                }
+            } catch (e) { console.error('fetch error', e); }
+        }
+
+        setInterval(fetchLatest, 1000);
+        fetchLatest();
+    </script>
+</body>
+</html>

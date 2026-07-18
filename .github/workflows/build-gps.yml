@@ -1,0 +1,36 @@
+name: Build GPS APK
+
+on:
+  push:
+    paths:
+      - 'gps_app/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Gradle Wrapper
+        working-directory: gps_app
+        run: gradle wrapper --gradle-version 8.5
+
+      - name: Build APK
+        working-directory: gps_app
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gps-test-apk
+          path: gps_app/app/build/outputs/apk/debug/*.apk

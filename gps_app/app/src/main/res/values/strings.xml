@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GPS 测试</string>
+    <string name="gps_status">GPS 状态</string>
+    <string name="gps_fix">已定位</string>
+    <string name="gps_no_fix">未定位</string>
+    <string name="latitude">纬度</string>
+    <string name="longitude">经度</string>
+    <string name="altitude">海拔</string>
+    <string name="accuracy">精度</string>
+    <string name="speed">速度</string>
+    <string name="bearing">方向</string>
+    <string name="satellites">卫星数</string>
+    <string name="wifi_info">WiFi 信息</string>
+    <string name="wifi_ssid">SSID</string>
+    <string name="wifi_rssi">信号强度</string>
+    <string name="wifi_freq">频率</string>
+    <string name="wifi_ip">本机 IP</string>
+    <string name="server_config">电脑端配置</string>
+    <string name="server_ip">电脑 IP 地址</string>
+    <string name="server_port">端口</string>
+    <string name="start_send">开始发送</string>
+    <string name="stop_send">停止发送</string>
+    <string name="sending_status">发送状态</string>
+    <string name="meters">米</string>
+    <string name="meters_per_sec">米/秒</string>
+    <string name="dbm">dBm</string>
+    <string name="mhz">MHz</string>
+    <string name="degrees">度</string>
+    <string name="connecting">连接中…</string>
+    <string name="connected">已连接</string>
+    <string name="disconnected">未连接</string>
+</resources>
