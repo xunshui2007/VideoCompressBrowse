@@ -128,9 +128,9 @@ class VideoCompressor(private val context: Context) {
 
             while (true) {
                 val encIdx = encoder.dequeueOutputBuffer(encBufferInfo, 0)
-                if (encIdx == MediaCodec.INFO_TRY_AGAIN_LATER) break
-                when (encIdx) {
-                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                when {
+                    encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
+                    encIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
                     }
                     encIdx >= 0 -> {
