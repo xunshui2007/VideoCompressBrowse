@@ -139,6 +139,10 @@ class VideoCompressor(private val context: Context) {
                     encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
                     encIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
+                        if (!muxerStarted) {
+                            muxer.start()
+                            muxerStarted = true
+                        }
                     }
                     encIdx >= 0 -> {
                         val encBuf = encoder.getOutputBuffer(encIdx)!!
@@ -151,19 +155,17 @@ class VideoCompressor(private val context: Context) {
                     }
                 }
             }
-
-            if (!muxerStarted && videoMuxerTrack >= 0) {
-                muxer.start()
-                muxerStarted = true
-            }
         }
 
         encoder.signalEndOfInputStream()
 
+        var drainRetries = 0
         while (true) {
             val encIdx = encoder.dequeueOutputBuffer(encBufferInfo, 50_000)
             when {
-                encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
+                encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (++drainRetries > 3) break
+                }
                 encIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     if (videoMuxerTrack < 0) {
                         videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
@@ -174,6 +176,7 @@ class VideoCompressor(private val context: Context) {
                     }
                 }
                 encIdx >= 0 -> {
+                    drainRetries = 0
                     val encBuf = encoder.getOutputBuffer(encIdx)!!
                     if (encBufferInfo.size > 0 && muxerStarted) {
                         encBuf.position(encBufferInfo.offset)
@@ -192,7 +195,7 @@ class VideoCompressor(private val context: Context) {
         encoder.release()
         extractor.release()
         if (muxerStarted) {
-            muxer.stop()
+            try { muxer.stop() } catch (_: Exception) {}
         }
         muxer.release()
     }
