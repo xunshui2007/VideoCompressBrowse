@@ -203,15 +203,13 @@ class MainActivity : AppCompatActivity() {
                 val result = compressor.compress(url, object : ProgressCallback {
                     override fun onProgress(bytesRead: Long, totalBytes: Long) {
                         val pct = ((bytesRead.toDouble() / totalBytes) * 100).toInt()
-                        withContext(Dispatchers.Main) {
+                        binding.root.post {
                             binding.statusText.text = "下载中 $pct%"
                             binding.progressBar.progress = pct
                         }
                     }
                     override fun onStage(stage: String) {
-                        withContext(Dispatchers.Main) {
-                            binding.statusText.text = stage
-                        }
+                        binding.root.post { binding.statusText.text = stage }
                     }
                 })
 
