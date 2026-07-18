@@ -17,6 +17,11 @@ data class CompressResult(
     val compressedSize: Long
 )
 
+fun interface ProgressCallback {
+    fun onProgress(bytesRead: Long, totalBytes: Long)
+    fun onStage(stage: String) {}
+}
+
 class VideoCompressor(private val context: Context) {
 
     private val cacheDir: File
@@ -27,7 +32,7 @@ class VideoCompressor(private val context: Context) {
         cacheDir = File(context.cacheDir, "video_cache").also { it.mkdirs() }
     }
 
-    suspend fun compress(url: String): CompressResult = withContext(Dispatchers.IO) {
+    suspend fun compress(url: String, progress: ProgressCallback? = null): CompressResult = withContext(Dispatchers.IO) {
         val urlHash = md5(url)
         val inputFile = File(cacheDir, "${urlHash}_input")
         val outputFile = File(cacheDir, "${urlHash}_compressed.mp4")
@@ -37,7 +42,9 @@ class VideoCompressor(private val context: Context) {
             return@withContext CompressResult(outputFile, origSize, outputFile.length())
         }
 
-        download(url, inputFile)
+        progress?.onStage("下载中…")
+        download(url, inputFile, progress)
+        progress?.onStage("转码中…")
         val origSize = inputFile.length()
         transcode(inputFile, outputFile)
         val compSize = outputFile.length()
@@ -212,7 +219,7 @@ class VideoCompressor(private val context: Context) {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    private fun download(url: String, target: File) {
+    private fun download(url: String, target: File, progress: ProgressCallback? = null) {
         val client = okhttp3.OkHttpClient.Builder()
             .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
@@ -227,9 +234,20 @@ class VideoCompressor(private val context: Context) {
             if (!response.isSuccessful) {
                 throw RuntimeException("Download failed: HTTP ${response.code}")
             }
-            response.body?.byteStream()?.use { input ->
+            val body = response.body ?: throw RuntimeException("Empty response body")
+            val totalBytes = body.contentLength()
+            var bytesRead = 0L
+            body.byteStream().use { input ->
                 java.io.FileOutputStream(target).use { output ->
-                    input.copyTo(output)
+                    val buf = ByteArray(8192)
+                    var n: Int
+                    while (input.read(buf).also { n = it } != -1) {
+                        output.write(buf, 0, n)
+                        bytesRead += n
+                        if (totalBytes > 0) {
+                            progress?.onProgress(bytesRead, totalBytes)
+                        }
+                    }
                 }
             }
         }

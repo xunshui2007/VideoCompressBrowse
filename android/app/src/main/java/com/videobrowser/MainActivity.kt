@@ -195,28 +195,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCompression(url: String) {
-        binding.statusText.text = getString(R.string.status_downloading)
         binding.progressBar.visibility = View.VISIBLE
+        binding.progressBar.max = 100
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val result = compressor.compress(url)
+                val result = compressor.compress(url, object : ProgressCallback {
+                    override fun onProgress(bytesRead: Long, totalBytes: Long) {
+                        val pct = ((bytesRead.toDouble() / totalBytes) * 100).toInt()
+                        withContext(Dispatchers.Main) {
+                            binding.statusText.text = "下载中 $pct%"
+                            binding.progressBar.progress = pct
+                        }
+                    }
+                    override fun onStage(stage: String) {
+                        withContext(Dispatchers.Main) {
+                            binding.statusText.text = stage
+                        }
+                    }
+                })
 
                 withContext(Dispatchers.Main) {
                     binding.progressBar.visibility = View.GONE
-                    val origMb = result.originalSize / (1024.0 * 1024.0)
-                    val compMb = result.compressedSize / (1024.0 * 1024.0)
+                    val origMb = "%.1f".format(result.originalSize / (1024.0 * 1024.0))
+                    val compMb = "%.1f".format(result.compressedSize / (1024.0 * 1024.0))
                     val saved = if (result.originalSize > 0) {
                         ((1.0 - result.compressedSize.toDouble() / result.originalSize) * 100).toInt()
                     } else 0
 
-                    binding.statusText.text = getString(R.string.status_saved, saved)
-                    VideoPlayerActivity.start(
-                        this@MainActivity,
-                        result.compressedFile.absolutePath,
-                        result.originalSize,
-                        result.compressedSize
-                    )
+                    val summary = "原始 ${origMb}MB → 压缩后 ${compMb}MB (节省 $saved%)"
+                    binding.statusText.text = summary
+
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("压缩完成")
+                        .setMessage(summary)
+                        .setPositiveButton("播放") { _, _ ->
+                            VideoPlayerActivity.start(
+                                this@MainActivity,
+                                result.compressedFile.absolutePath,
+                                result.originalSize,
+                                result.compressedSize
+                            )
+                        }
+                        .setNegativeButton("直接播放原视频") { _, _ ->
+                            VideoPlayerActivity.start(this@MainActivity, url, 0, 0)
+                        }
+                        .show()
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -224,8 +248,8 @@ class MainActivity : AppCompatActivity() {
                     binding.statusText.setText(R.string.status_failed)
                     Toast.makeText(
                         this@MainActivity,
-                        R.string.compress_failed,
-                        Toast.LENGTH_SHORT
+                        "压缩失败: ${e.message}",
+                        Toast.LENGTH_LONG
                     ).show()
                 }
             }
