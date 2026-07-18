@@ -6,7 +6,6 @@ import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
-import android.view.Surface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -57,13 +56,13 @@ class VideoCompressor(private val context: Context) {
         }
 
         val videoFormat = extractor.getTrackFormat(videoTrackIdx)
+        val width = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
+        val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
+
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
         val decoder = MediaCodec.createDecoderByType(videoFormat.getString(MediaFormat.KEY_MIME)!!)
         val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-
-        val width = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
-        val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
 
         val outputFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_BIT_RATE, estimateBitrate(width, height))
@@ -81,15 +80,17 @@ class VideoCompressor(private val context: Context) {
         encoder.start()
         extractor.selectTrack(videoTrackIdx)
 
-        val bufferInfo = MediaCodec.BufferInfo()
+        val decBufferInfo = MediaCodec.BufferInfo()
+        val encBufferInfo = MediaCodec.BufferInfo()
+
         var decoderInputDone = false
-        var decoderOutputDone = false
+        var decoderDone = false
         var videoMuxerTrack = -1
         var muxerStarted = false
         var lastKeptPtsUs = Long.MIN_VALUE
         var renderFrameCount = 0
 
-        while (!decoderOutputDone) {
+        while (!decoderDone) {
             if (!decoderInputDone) {
                 val inIdx = decoder.dequeueInputBuffer(10_000)
                 if (inIdx >= 0) {
@@ -105,13 +106,14 @@ class VideoCompressor(private val context: Context) {
                 }
             }
 
-            val outIdx = decoder.dequeueOutputBuffer(bufferInfo, 10_000)
+            val outIdx = decoder.dequeueOutputBuffer(decBufferInfo, 10_000)
             when {
                 outIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
                 outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {}
                 outIdx >= 0 -> {
-                    val eos = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                    val pts = bufferInfo.presentationTimeUs
+                    val eos = (decBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                    if (eos) decoderDone = true
+                    val pts = decBufferInfo.presentationTimeUs
                     val shouldRender = !eos && (pts >= lastKeptPtsUs + FRAME_INTERVAL_US)
                     if (shouldRender) {
                         lastKeptPtsUs = pts
@@ -121,31 +123,40 @@ class VideoCompressor(private val context: Context) {
                     } else {
                         decoder.releaseOutputBuffer(outIdx, false)
                     }
-                    if (eos) {
-                        decoderOutputDone = true
+                }
+            }
+
+            while (true) {
+                val encIdx = encoder.dequeueOutputBuffer(encBufferInfo, 0)
+                if (encIdx == MediaCodec.INFO_TRY_AGAIN_LATER) break
+                when (encIdx) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
+                    }
+                    encIdx >= 0 -> {
+                        val encBuf = encoder.getOutputBuffer(encIdx)!!
+                        if (encBufferInfo.size > 0 && muxerStarted) {
+                            encBuf.position(encBufferInfo.offset)
+                            encBuf.limit(encBufferInfo.offset + encBufferInfo.size)
+                            muxer.writeSampleData(videoMuxerTrack, encBuf, encBufferInfo)
+                        }
+                        encoder.releaseOutputBuffer(encIdx, false)
                     }
                 }
             }
 
-            drainEncoder(encoder, muxer, bufferInfo) { track, started ->
-                if (!started && track >= 0) {
-                    videoMuxerTrack = track
-                    muxer.start()
-                    muxerStarted = true
-                    true
-                } else false
+            if (!muxerStarted && videoMuxerTrack >= 0) {
+                muxer.start()
+                muxerStarted = true
             }
         }
 
         encoder.signalEndOfInputStream()
 
-        var encoderDone = false
-        while (!encoderDone) {
-            val encIdx = encoder.dequeueOutputBuffer(bufferInfo, 10_000)
+        while (true) {
+            val encIdx = encoder.dequeueOutputBuffer(encBufferInfo, 50_000)
             when {
-                encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                    if (muxerStarted) continue else break
-                }
+                encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
                 encIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     if (videoMuxerTrack < 0) {
                         videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
@@ -157,15 +168,13 @@ class VideoCompressor(private val context: Context) {
                 }
                 encIdx >= 0 -> {
                     val encBuf = encoder.getOutputBuffer(encIdx)!!
-                    if (bufferInfo.size > 0 && muxerStarted) {
-                        encBuf.position(bufferInfo.offset)
-                        encBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        muxer.writeSampleData(videoMuxerTrack, encBuf, bufferInfo)
+                    if (encBufferInfo.size > 0 && muxerStarted) {
+                        encBuf.position(encBufferInfo.offset)
+                        encBuf.limit(encBufferInfo.offset + encBufferInfo.size)
+                        muxer.writeSampleData(videoMuxerTrack, encBuf, encBufferInfo)
                     }
                     encoder.releaseOutputBuffer(encIdx, false)
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        encoderDone = true
-                    }
+                    if ((encBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
                 }
             }
         }
@@ -179,38 +188,6 @@ class VideoCompressor(private val context: Context) {
             muxer.stop()
         }
         muxer.release()
-    }
-
-    private fun drainEncoder(
-        encoder: MediaCodec,
-        muxer: MediaMuxer,
-        bufferInfo: MediaCodec.BufferInfo,
-        onFormatChanged: (track: Int, muxerStarted: Boolean) -> Boolean
-    ) {
-        var track = -1
-        var started = false
-        while (true) {
-            val encIdx = encoder.dequeueOutputBuffer(bufferInfo, 10_000)
-            when {
-                encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
-                encIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    track = muxer.addTrack(encoder.outputFormat)
-                    started = onFormatChanged(track, started)
-                }
-                encIdx >= 0 -> {
-                    val encBuf = encoder.getOutputBuffer(encIdx)!!
-                    if (bufferInfo.size > 0 && track >= 0 && started) {
-                        encBuf.position(bufferInfo.offset)
-                        encBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        muxer.writeSampleData(track, encBuf, bufferInfo)
-                    }
-                    encoder.releaseOutputBuffer(encIdx, false)
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        break
-                    }
-                }
-            }
-        }
     }
 
     private fun findTrack(extractor: MediaExtractor, prefix: String): Int {
