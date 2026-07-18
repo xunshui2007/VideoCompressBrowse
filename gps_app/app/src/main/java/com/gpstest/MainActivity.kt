@@ -11,6 +11,7 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.content.res.ColorStateList
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -47,7 +48,6 @@ class MainActivity : AppCompatActivity() {
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sendRunnable: Runnable? = null
-    private var lastSendTime = 0L
     private val SEND_INTERVAL_MS = 1000L
 
     private val locationListener = object : LocationListener {
@@ -261,7 +261,7 @@ class MainActivity : AppCompatActivity() {
 
             isSending = true
             binding.btnToggleSend.text = getString(R.string.stop_send)
-            binding.btnToggleSend.setBackgroundColor(
+            binding.btnToggleSend.backgroundTintList = ColorStateList.valueOf(
                 ContextCompat.getColor(this, R.color.gps_no_fix)
             )
             binding.tvSendStatus.text = getString(R.string.connecting)
@@ -269,7 +269,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             isSending = false
             binding.btnToggleSend.text = getString(R.string.start_send)
-            binding.btnToggleSend.setBackgroundColor(
+            binding.btnToggleSend.backgroundTintList = ColorStateList.valueOf(
                 ContextCompat.getColor(this, R.color.primary)
             )
             binding.tvSendStatus.text = getString(R.string.disconnected)
@@ -351,6 +351,6 @@ class MainActivity : AppCompatActivity() {
         try {
             locationManager.removeUpdates(locationListener)
         } catch (_: Exception) {}
-        gnssCallback?.let { locationManager.unregisterGnssStatusCallback(it) }
+        try { gnssCallback?.let { locationManager.unregisterGnssStatusCallback(it) } } catch (_: Exception) {}
     }
 }
