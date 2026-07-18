@@ -6,7 +6,11 @@ android/local.properties
 android/.idea/
 *.iml
 
-# Electron
+# Electron (cleaned up)
+main.js
+preload.js
+transcoder.js
+package.json
 node_modules/
 renderer/
 

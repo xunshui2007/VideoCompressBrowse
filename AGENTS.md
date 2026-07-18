@@ -78,7 +78,3 @@ cd android/
 - 转码需要设备 CPU/GPU，低端机型大文件可能耗时较长
 - **v1 无声**: 音频轨道不转码（仅视频降帧）
 - MediaCodec 编码质量取决于设备硬件编码器
-
-## 清理旧文件
-
-`main.js`、`preload.js`、`transcoder.js`、`renderer/`、`package.json` 是 Electron 方案的遗留文件，可删除。
