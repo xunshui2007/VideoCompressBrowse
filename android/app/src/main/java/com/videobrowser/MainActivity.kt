@@ -3,6 +3,8 @@ package com.videobrowser
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -36,15 +38,38 @@ class MainActivity : AppCompatActivity() {
     private val VIDEO_DETECT_JS = """
         (function() {
             var urls = [];
-            document.querySelectorAll('video').forEach(function(v) {
-                if (v.src) urls.push(v.src);
-                v.querySelectorAll('source').forEach(function(s) {
-                    if (s.src) urls.push(s.src);
-                });
-            });
-            return urls;
+            var seen = {};
+            function scan() {
+                // <video> elements
+                var vs = document.querySelectorAll('video');
+                for (var i = 0; i < vs.length; i++) {
+                    if (vs[i].src && !seen[vs[i].src]) { seen[vs[i].src] = 1; urls.push(vs[i].src); }
+                    if (vs[i].poster && !seen[vs[i].poster]) { seen[vs[i].poster] = 1; urls.push(vs[i].poster); }
+                    var ss = vs[i].querySelectorAll('source');
+                    for (var j = 0; j < ss.length; j++) {
+                        if (ss[j].src && !seen[ss[j].src]) { seen[ss[j].src] = 1; urls.push(ss[j].src); }
+                    }
+                }
+                // <a> links to video files
+                var exts = /\.(mp4|webm|m3u8|ts|mkv|avi|mov)(\?.*)?$/i;
+                var as = document.querySelectorAll('a[href]');
+                for (var i = 0; i < as.length; i++) {
+                    if (exts.test(as[i].href) && !seen[as[i].href]) { seen[as[i].href] = 1; urls.push(as[i].href); }
+                }
+                // data-* attributes with video URLs
+                var all = document.querySelectorAll('[data-video],[data-src],[data-url]');
+                for (var i = 0; i < all.length; i++) {
+                    var val = all[i].getAttribute('data-video') || all[i].getAttribute('data-src') || all[i].getAttribute('data-url');
+                    if (val && exts.test(val) && !seen[val]) { seen[val] = 1; urls.push(val); }
+                }
+                return urls;
+            }
+            return scan();
         })();
     """.trimIndent()
+
+    private var videoPollHandler: Handler? = null
+    private var videoPollRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,11 +109,13 @@ class MainActivity : AppCompatActivity() {
                 binding.statusText.setText(R.string.status_loading)
                 videoUrls.clear()
                 binding.videoBanner.visibility = View.GONE
+                stopVideoPolling()
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 binding.statusText.setText(R.string.status_compression_ready)
                 detectVideos(view)
+                startVideoPolling(view)
             }
 
             override fun shouldOverrideUrlLoading(
@@ -149,11 +176,15 @@ class MainActivity : AppCompatActivity() {
             if (result.isNullOrEmpty() || result == "null" || result == "[]") return@evaluateJavascript
             try {
                 val arr = JSONArray(result)
+                var added = false
                 for (i in 0 until arr.length()) {
                     val u = arr.optString(i)
-                    if (u.isNotEmpty() && !videoUrls.contains(u)) videoUrls.add(u)
+                    if (u.isNotEmpty() && !videoUrls.contains(u)) {
+                        videoUrls.add(u)
+                        added = true
+                    }
                 }
-                if (videoUrls.isNotEmpty()) {
+                if (added) {
                     binding.videoBanner.visibility = View.VISIBLE
                     binding.videoBannerText.text =
                         getString(R.string.videos_detected, videoUrls.size)
@@ -161,6 +192,29 @@ class MainActivity : AppCompatActivity() {
             } catch (_: JSONException) {
             }
         }
+    }
+
+    private fun startVideoPolling(view: WebView) {
+        stopVideoPolling()
+        val handler = Handler(Looper.getMainLooper())
+        videoPollHandler = handler
+        var count = 0
+        val runnable = object : Runnable {
+            override fun run() {
+                if (count >= 8) return
+                count++
+                detectVideos(view)
+                handler.postDelayed(this, 2000)
+            }
+        }
+        videoPollRunnable = runnable
+        handler.postDelayed(runnable, 2000)
+    }
+
+    private fun stopVideoPolling() {
+        videoPollRunnable?.let { videoPollHandler?.removeCallbacks(it) }
+        videoPollRunnable = null
+        videoPollHandler = null
     }
 
     private fun showVideoSelectionDialog() {
