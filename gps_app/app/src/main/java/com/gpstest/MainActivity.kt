@@ -15,7 +15,11 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.gpstest.databinding.ActivityMainBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -66,7 +70,6 @@ class MainActivity : AppCompatActivity() {
         wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
         checkPermissions()
-        setupGnssCallback()
         updateWifiInfo()
         binding.btnToggleSend.setOnClickListener { toggleSending() }
     }
@@ -85,6 +88,7 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), 100)
         } else {
             startLocationUpdates()
+            setupGnssCallback()
         }
     }
 
@@ -101,6 +105,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (allGranted) {
                 startLocationUpdates()
+                setupGnssCallback()
             } else {
                 Toast.makeText(this, "需要位置权限才能读取GPS", Toast.LENGTH_LONG).show()
             }
@@ -275,18 +280,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun startSending(ip: String, port: String) {
         val url = "http://$ip:$port/api/gps"
-
         sendRunnable = object : Runnable {
             override fun run() {
                 if (!isSending) return
-                sendData(url)
+                lifecycleScope.launch { sendData(url) }
                 mainHandler.postDelayed(this, SEND_INTERVAL_MS)
             }
         }
         mainHandler.post(sendRunnable!!)
     }
 
-    private fun sendData(url: String) {
+    private suspend fun sendData(url: String) = withContext(Dispatchers.IO) {
         val loc = currentLocation
         val wifi = wifiManager.connectionInfo
 
@@ -316,15 +320,13 @@ class MainActivity : AppCompatActivity() {
             val body = json.toString().toRequestBody(JSON_MEDIA)
             val request = Request.Builder().url(url).post(body).build()
             client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    mainHandler.post {
+                withContext(Dispatchers.Main) {
+                    if (response.isSuccessful) {
                         binding.tvSendStatus.text = getString(R.string.connected)
                         binding.tvSendStatus.setTextColor(
                             ContextCompat.getColor(this@MainActivity, R.color.gps_fix)
                         )
-                    }
-                } else {
-                    mainHandler.post {
+                    } else {
                         binding.tvSendStatus.text = "服务器错误: ${response.code}"
                         binding.tvSendStatus.setTextColor(
                             ContextCompat.getColor(this@MainActivity, R.color.gps_no_fix)
@@ -333,7 +335,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            mainHandler.post {
+            withContext(Dispatchers.Main) {
                 binding.tvSendStatus.text = "发送失败: ${e.localizedMessage?.take(30)}"
                 binding.tvSendStatus.setTextColor(
                     ContextCompat.getColor(this@MainActivity, R.color.gps_no_fix)
