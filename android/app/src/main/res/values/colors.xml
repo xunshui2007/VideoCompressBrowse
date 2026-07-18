@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="toolbar_bg">#F5F5F5</color>
+    <color name="status_bg">#ECEFF1</color>
+    <color name="banner_bg">#E3F2FD</color>
+    <color name="banner_text">#1565C0</color>
+    <color name="primary">#1565C0</color>
+    <color name="primary_dark">#0D47A1</color>
+    <color name="accent">#4CAF50</color>
+</resources>

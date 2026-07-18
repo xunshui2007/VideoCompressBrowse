@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">视频压缩浏览器</string>
+    <string name="back">后退</string>
+    <string name="forward">前进</string>
+    <string name="refresh">刷新</string>
+    <string name="url_hint">输入网址</string>
+    <string name="status_ready">就绪</string>
+    <string name="status_loading">加载中…</string>
+    <string name="status_compression_ready">压缩: 开启 (20fps)</string>
+    <string name="status_downloading">正在下载并压缩视频…</string>
+    <string name="status_saved">节省 %1$d%% 流量</string>
+    <string name="status_failed">压缩失败</string>
+    <string name="videos_detected">检测到 %1$d 个视频</string>
+    <string name="compress_now">立即压缩</string>
+    <string name="select_video">选择要压缩的视频</string>
+    <string name="compress_video">压缩视频</string>
+    <string name="compress_video_message">压缩后将从 30fps 降至 20fps，节省约 30–50% 流量</string>
+    <string name="compress_and_play">压缩并播放</string>
+    <string name="play_original">直接播放</string>
+    <string name="cancel">取消</string>
+    <string name="compress_failed">压缩失败，请重试</string>
+    <string name="stats_title">压缩统计</string>
+    <string name="stats_original">原始: %1$s MB</string>
+    <string name="stats_compressed">压缩后: %1$s MB (20fps)</string>
+    <string name="stats_saved">节省: %1$s MB (%2$d%%)</string>
+    <string name="share_video">分享视频</string>
+</resources>

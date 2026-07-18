@@ -1,0 +1,12 @@
+{
+  "name": "video-compress-browser",
+  "version": "1.0.0",
+  "description": "视频压缩浏览器 - 通过降低视频帧率节省流量",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^28.0.0"
+  }
+}
