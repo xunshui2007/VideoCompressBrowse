@@ -44,6 +44,15 @@
             android:maxLines="1" />
 
         <ImageButton
+            android:id="@+id/btn_private"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@drawable/ic_incognito"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/private_mode"
+            android:scaleType="center" />
+
+        <ImageButton
             android:id="@+id/btn_back"
             android:layout_width="40dp"
             android:layout_height="40dp"

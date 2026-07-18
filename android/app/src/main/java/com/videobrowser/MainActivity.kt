@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var compressor: VideoCompressor
     private val videoUrls = mutableListOf<String>()
+    private var isPrivate = false
 
     companion object {
         private val VIDEO_EXT = Regex(
@@ -156,9 +157,13 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
 
+        binding.btnPrivate.setOnClickListener { togglePrivateMode() }
+
         binding.videoBanner.setOnClickListener {
             showVideoSelectionDialog()
         }
+
+        updatePrivateUi()
     }
 
     private fun navigateTo(input: String) {
@@ -167,6 +172,39 @@ class MainActivity : AppCompatActivity() {
         } else input
         binding.webview.loadUrl(url)
         binding.urlBar.setText(url)
+    }
+
+    // --- Private mode ---
+
+    private fun togglePrivateMode() {
+        isPrivate = !isPrivate
+        updatePrivateUi()
+        if (isPrivate) {
+            binding.webview.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            binding.webview.clearCache(true)
+            binding.webview.clearFormData()
+            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+            binding.statusText.setText(R.string.status_private)
+        } else {
+            binding.webview.settings.cacheMode = WebSettings.LOAD_DEFAULT
+            binding.statusText.setText(R.string.status_compression_ready)
+        }
+    }
+
+    private fun updatePrivateUi() {
+        if (isPrivate) {
+            binding.toolbar.setBackgroundColor(getColor(R.color.private_toolbar_bg))
+            binding.statusText.setBackgroundColor(getColor(R.color.private_bg))
+            binding.statusText.setTextColor(getColor(android.R.color.white))
+            binding.btnPrivate.setColorFilter(getColor(android.R.color.holo_orange_dark))
+            binding.btnPrivate.setAlpha(1.0f)
+        } else {
+            binding.toolbar.setBackgroundColor(getColor(R.color.toolbar_bg))
+            binding.statusText.setBackgroundColor(getColor(R.color.status_bg))
+            binding.statusText.setTextColor(getColor(android.R.color.primary_text_dark))
+            binding.btnPrivate.clearColorFilter()
+            binding.btnPrivate.setAlpha(0.5f)
+        }
     }
 
     // --- Video detection ---
@@ -321,5 +359,14 @@ class MainActivity : AppCompatActivity() {
     override fun onRestoreInstanceState(savedInstanceState: Bundle) {
         super.onRestoreInstanceState(savedInstanceState)
         binding.webview.restoreState(savedInstanceState)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isPrivate) {
+            binding.webview.clearCache(true)
+            binding.webview.clearHistory()
+            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+        }
     }
 }
