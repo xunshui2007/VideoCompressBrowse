@@ -118,7 +118,7 @@ class VideoCompressor(private val context: Context) {
                     if (shouldRender) {
                         lastKeptPtsUs = pts
                         val renderTimeNs = renderFrameCount * FRAME_INTERVAL_US * 1000L
-                        decoder.releaseOutputBuffer(outIdx, true, renderTimeNs)
+                        decoder.releaseOutputBuffer(outIdx, renderTimeNs)
                         renderFrameCount++
                     } else {
                         decoder.releaseOutputBuffer(outIdx, false)
