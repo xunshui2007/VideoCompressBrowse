@@ -40,28 +40,29 @@ class MainActivity : AppCompatActivity() {
         (function() {
             var urls = [];
             var seen = {};
+            function isHttp(u) { return u.indexOf('http://') === 0 || u.indexOf('https://') === 0; }
             function scan() {
                 // <video> elements
                 var vs = document.querySelectorAll('video');
                 for (var i = 0; i < vs.length; i++) {
-                    if (vs[i].src && !seen[vs[i].src]) { seen[vs[i].src] = 1; urls.push(vs[i].src); }
-                    if (vs[i].poster && !seen[vs[i].poster]) { seen[vs[i].poster] = 1; urls.push(vs[i].poster); }
+                    if (vs[i].src && isHttp(vs[i].src) && !seen[vs[i].src]) { seen[vs[i].src] = 1; urls.push(vs[i].src); }
+                    if (vs[i].poster && isHttp(vs[i].poster) && !seen[vs[i].poster]) { seen[vs[i].poster] = 1; urls.push(vs[i].poster); }
                     var ss = vs[i].querySelectorAll('source');
                     for (var j = 0; j < ss.length; j++) {
-                        if (ss[j].src && !seen[ss[j].src]) { seen[ss[j].src] = 1; urls.push(ss[j].src); }
+                        if (ss[j].src && isHttp(ss[j].src) && !seen[ss[j].src]) { seen[ss[j].src] = 1; urls.push(ss[j].src); }
                     }
                 }
                 // <a> links to video files
                 var exts = /\.(mp4|webm|m3u8|ts|mkv|avi|mov)(\?.*)?$/i;
                 var as = document.querySelectorAll('a[href]');
                 for (var i = 0; i < as.length; i++) {
-                    if (exts.test(as[i].href) && !seen[as[i].href]) { seen[as[i].href] = 1; urls.push(as[i].href); }
+                    if (exts.test(as[i].href) && isHttp(as[i].href) && !seen[as[i].href]) { seen[as[i].href] = 1; urls.push(as[i].href); }
                 }
                 // data-* attributes with video URLs
                 var all = document.querySelectorAll('[data-video],[data-src],[data-url]');
                 for (var i = 0; i < all.length; i++) {
                     var val = all[i].getAttribute('data-video') || all[i].getAttribute('data-src') || all[i].getAttribute('data-url');
-                    if (val && exts.test(val) && !seen[val]) { seen[val] = 1; urls.push(val); }
+                    if (val && isHttp(val) && exts.test(val) && !seen[val]) { seen[val] = 1; urls.push(val); }
                 }
                 return urls;
             }
@@ -124,7 +125,7 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest
             ): Boolean {
                 val url = request.url.toString()
-                if (VIDEO_EXT.containsMatchIn(url)) {
+                if (VIDEO_EXT.containsMatchIn(url) && isHttpUrl(url)) {
                     promptCompressVideo(url)
                     return true
                 }
@@ -209,6 +210,10 @@ class MainActivity : AppCompatActivity() {
 
     // --- Video detection ---
 
+    private fun isHttpUrl(url: String): Boolean {
+        return url.startsWith("http://") || url.startsWith("https://")
+    }
+
     private fun detectVideos(view: WebView) {
         view.evaluateJavascript(VIDEO_DETECT_JS) { result ->
             if (result.isNullOrEmpty() || result == "null" || result == "[]") return@evaluateJavascript
@@ -217,7 +222,7 @@ class MainActivity : AppCompatActivity() {
                 var added = false
                 for (i in 0 until arr.length()) {
                     val u = arr.optString(i)
-                    if (u.isNotEmpty() && !videoUrls.contains(u)) {
+                    if (u.isNotEmpty() && isHttpUrl(u) && !videoUrls.contains(u)) {
                         videoUrls.add(u)
                         added = true
                     }
