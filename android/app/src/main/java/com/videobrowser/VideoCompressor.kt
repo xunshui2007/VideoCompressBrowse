@@ -46,7 +46,15 @@ class VideoCompressor(private val context: Context) {
         download(url, inputFile, progress)
         progress?.onStage("转码中…")
         val origSize = inputFile.length()
-        transcode(inputFile, outputFile)
+        try {
+            transcode(inputFile, outputFile)
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCompressor", "transcode failed", e)
+            throw e
+        }
+        if (!outputFile.exists() || outputFile.length() < 1024) {
+            throw RuntimeException("压缩输出文件异常: size=${outputFile.length()}")
+        }
         val compSize = outputFile.length()
         CompressResult(outputFile, origSize, compSize)
     }
@@ -138,8 +146,10 @@ class VideoCompressor(private val context: Context) {
                 when {
                     encIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
                     encIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
-                        if (!muxerStarted) {
+                        if (videoMuxerTrack < 0) {
+                            videoMuxerTrack = muxer.addTrack(encoder.outputFormat)
+                        }
+                        if (!muxerStarted && videoMuxerTrack >= 0) {
                             muxer.start()
                             muxerStarted = true
                         }
