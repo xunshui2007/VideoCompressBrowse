@@ -1,1 +1,1 @@
--keep class com.arthenica.ffmpegkit.** { *; }
+# No external native libraries - MediaCodec is part of Android framework

@@ -47,8 +47,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // FFmpeg for video transcoding
-    implementation("com.arthenica:ffmpeg-kit-full:4.5.1-1")
+    // Video transcoding via Android MediaCodec (no external dependency)
 
     // ExoPlayer for video playback
     implementation("androidx.media3:media3-exoplayer:1.2.1")
