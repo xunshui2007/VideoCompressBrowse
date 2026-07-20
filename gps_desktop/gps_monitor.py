@@ -246,11 +246,18 @@ class GPSMonitor:
         return f'({dirs[idx]})'
 
     def update(self):
+        try:
+            self._do_update()
+        except Exception as e:
+            print(f'Update error: {e}')
+        finally:
+            self.root.after(500, self.update)
+
+    def _do_update(self):
         with data_lock:
             d = dict(latest_data)
         if not d:
             self.status_dot.itemconfig(self._dot, fill='#ccc')
-            self.root.after(500, self.update)
             return
 
         self.status_dot.itemconfig(self._dot, fill='#4caf50')
@@ -266,7 +273,8 @@ class GPSMonitor:
             self.gps_text.configure(text='无信号', fg='#f44336')
         self.provider_text.configure(text=f'来源: {d.get("provider", "?")}')
 
-        sats = d.get('satellites_detail', [])
+        raw_sats = d.get('satellites_detail', [])
+        sats = raw_sats if isinstance(raw_sats, list) else []
         total_sats = d.get('satellites', 0)
         total_visible = len(sats) if sats else 0
         self.sat_count_text.configure(text=f'卫星: {total_sats} 锁定 / {total_visible} 可见')
@@ -350,8 +358,6 @@ class GPSMonitor:
 
         self.phone_ip_text.configure(text=f'手机 IP: {d.get("phone_ip", "-")}')
         self.last_upd_text.configure(text=f'最后更新: {d.get("received_at", "-")}')
-
-        self.root.after(500, self.update)
 
 
 def start_server():
