@@ -150,10 +150,15 @@ class GPSMonitor:
 
         body = tk.Frame(root, bg=BG)
         body.pack(fill='both', expand=True, padx=16)
-        left = tk.Frame(body, bg=BG)
-        left.pack(side='left', fill='both', expand=True, padx=(0, 8))
-        right = tk.Frame(body, bg=BG)
-        right.pack(side='left', fill='both', expand=True, padx=(8, 0))
+
+        # Top row: left + right (shrink to content)
+        top_row = tk.Frame(body, bg=BG)
+        top_row.pack(fill='x')
+
+        left = tk.Frame(top_row, bg=BG)
+        left.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        right = tk.Frame(top_row, bg=BG)
+        right.pack(side='left', fill='x', expand=True, padx=(8, 0))
 
         # GPS (left)
         c = card(left, 'GPS 状态')
@@ -412,6 +417,20 @@ def start_server():
 if __name__ == '__main__':
     import sys
     console = '--console' in sys.argv
+
+    # Kill old instances on port 3000
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            'netstat -ano | findstr ":3000 " | findstr LISTENING',
+            shell=True, text=True)
+        for line in out.strip().split('\n'):
+            parts = line.split()
+            if len(parts) >= 5:
+                pid = parts[4]
+                os.system(f'taskkill /F /PID {pid} >nul 2>&1')
+    except: pass
+
     t = threading.Thread(target=start_server, daemon=True)
     t.start()
     print(f'GPS 服务器运行在 http://0.0.0.0:3000')
