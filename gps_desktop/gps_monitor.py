@@ -368,8 +368,7 @@ if __name__ == '__main__':
     if console:
         print('控制台模式，按 Ctrl+C 停止')
         try:
-            while True:
-                import time; time.sleep(1)
+            while True: import time; time.sleep(1)
         except KeyboardInterrupt:
             print('已停止')
     else:
@@ -378,11 +377,10 @@ if __name__ == '__main__':
             app = GPSMonitor(root)
             root.after(500, app.update)
             root.mainloop()
-        except tk.TclError:
-            print('无法启动 GUI，已切换至控制台模式')
-            print('按 Ctrl+C 停止')
+        except Exception as e:
+            print(f'GUI 启动失败: {e}')
+            print('已切换至控制台模式（无窗口），按 Ctrl+C 停止')
             try:
-                while True:
-                    import time; time.sleep(1)
+                while True: import time; time.sleep(1)
             except KeyboardInterrupt:
                 print('已停止')
