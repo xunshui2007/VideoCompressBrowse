@@ -224,6 +224,9 @@ class GPSMonitor:
         self.labels['sats'] = tk.Label(c, text='-', font=('Segoe UI', 10), fg=TEXT, bg=CARD)
         self.labels['sats'].pack(anchor='w', pady=(2, 0))
 
+        self.data_status = tk.Label(c, text='', font=('Segoe UI', 9), fg=SECONDARY, bg=CARD)
+        self.data_status.pack(anchor='w')
+
         btn_row = tk.Frame(c, bg=CARD)
         btn_row.pack(fill='x', pady=(6, 0))
         tk.Button(btn_row, text='📂 打开日志目录', command=open_logs,
@@ -309,13 +312,14 @@ class GPSMonitor:
         prov = d.get('provider', '')
         rssi = d.get('wifi_rssi'); ssid = d.get('wifi_ssid', '')
 
-        gps_ok = lat is not None and (acc is None or acc < 100)
-        if gps_ok:
-            self.labels['gps'].configure(text='已定位 ✓', fg='#2e7d32')
+        gps_fix = lat is not None and prov == 'gps' and (acc is None or acc < 100)
+        if gps_fix:
+            self.labels['gps'].configure(text='GPS 已定位 ✓', fg='#2e7d32')
         elif lat:
-            self.labels['gps'].configure(text=f'{prov} 定位中…', fg='#e65100')
+            self.labels['gps'].configure(text=f'{prov} 定位中… (精度 {acc:.0f}m)' if acc else f'{prov} 定位中…',
+                                         fg='#e65100')
         else:
-            self.labels['gps'].configure(text='搜索卫星…', fg='#c62828')
+            self.labels['gps'].configure(text='等待数据…', fg='#c62828')
         self.labels['provider'].configure(text=f'来源: {prov}' if prov else '')
 
         # Accuracy display
@@ -367,6 +371,7 @@ class GPSMonitor:
 
         self.labels['phone_ip'].configure(text=f'手机: {d.get("phone_ip", "-")}')
         self.labels['sats'].configure(text=f'卫星: {sats_cnt} 锁定  |  {prov or "?"}')
+        self.data_status.configure(text=f'数据: {len(d)} 字段 | 更新: {d.get("received_at", "-")}')
 
         # Sat table
         raw = d.get('satellites_detail', [])
