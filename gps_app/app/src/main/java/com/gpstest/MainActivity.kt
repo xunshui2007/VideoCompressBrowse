@@ -8,6 +8,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -81,6 +82,17 @@ class MainActivity : AppCompatActivity() {
         checkPermissions()
         updateWifiInfo()
         binding.btnToggleSend.setOnClickListener { toggleSending() }
+        requestNotificationPermission()
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 200)
+            }
+        }
     }
 
     private fun checkPermissions() {
@@ -276,106 +288,27 @@ class MainActivity : AppCompatActivity() {
         if (!isSending) {
             val ip = binding.etServerIp.text.toString().trim()
             val port = binding.etServerPort.text.toString().trim()
-
             if (ip.isEmpty() || port.isEmpty()) {
-                Toast.makeText(this, "请输入电脑 IP 和端口", Toast.LENGTH_SHORT).show()
-                return
+                Toast.makeText(this, "请输入电脑 IP 和端口", Toast.LENGTH_SHORT).show(); return
             }
             if (!ip.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"))) {
-                Toast.makeText(this, "IP 格式不正确", Toast.LENGTH_SHORT).show()
-                return
+                Toast.makeText(this, "IP 格式不正确", Toast.LENGTH_SHORT).show(); return
             }
-
             isSending = true
             binding.btnToggleSend.text = getString(R.string.stop_send)
             binding.btnToggleSend.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.gps_no_fix)
-            )
-            binding.tvSendStatus.text = getString(R.string.connecting)
-            startSending(ip, port)
+                ContextCompat.getColor(this, R.color.gps_no_fix))
+            binding.tvSendStatus.text = "后台运行中…"
+            binding.tvSendStatus.setTextColor(ContextCompat.getColor(this, R.color.gps_fix))
+            GpsService.start(this, "http://$ip:$port/api/gps")
         } else {
             isSending = false
             binding.btnToggleSend.text = getString(R.string.start_send)
             binding.btnToggleSend.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.primary)
-            )
+                ContextCompat.getColor(this, R.color.primary))
             binding.tvSendStatus.text = getString(R.string.disconnected)
-            sendRunnable?.let { mainHandler.removeCallbacks(it) }
-            sendRunnable = null
-        }
-    }
-
-    private fun startSending(ip: String, port: String) {
-        val url = "http://$ip:$port/api/gps"
-        sendRunnable = object : Runnable {
-            override fun run() {
-                if (!isSending) return
-                lifecycleScope.launch { sendData(url) }
-                mainHandler.postDelayed(this, SEND_INTERVAL_MS)
-            }
-        }
-        mainHandler.post(sendRunnable!!)
-    }
-
-    private suspend fun sendData(url: String) = withContext(Dispatchers.IO) {
-        val loc = currentLocation
-        val wifi = wifiManager.connectionInfo
-
-        val json = JSONObject().apply {
-            put("timestamp", System.currentTimeMillis())
-            put("satellites", satelliteCount)
-            put("satellites_detail", JSONArray(satellites.map {
-                JSONObject().apply {
-                    put("svid", it.svid)
-                    put("cn0", it.cn0.toDouble())
-                    put("used", it.usedInFix)
-                    put("const", it.constellation)
-                }
-            }))
-
-            if (loc != null) {
-                put("latitude", loc.latitude)
-                put("longitude", loc.longitude)
-                put("altitude", if (loc.hasAltitude()) loc.altitude else JSONObject.NULL)
-                put("accuracy", if (loc.hasAccuracy()) loc.accuracy else JSONObject.NULL)
-                put("speed", if (loc.hasSpeed()) loc.speed else JSONObject.NULL)
-                put("bearing", if (loc.hasBearing()) loc.bearing else JSONObject.NULL)
-                put("provider", loc.provider ?: "?")
-            }
-
-            if (wifi != null) {
-                put("wifi_ssid", wifi.ssid.removeSurrounding("\""))
-                put("wifi_rssi", wifi.rssi)
-                put("wifi_frequency", wifi.frequency)
-            }
-            put("phone_ip", getLocalIpAddress())
-        }
-
-        try {
-            val body = json.toString().toRequestBody(JSON_MEDIA)
-            val request = Request.Builder().url(url).post(body).build()
-            client.newCall(request).execute().use { response ->
-                withContext(Dispatchers.Main) {
-                    if (response.isSuccessful) {
-                        binding.tvSendStatus.text = getString(R.string.connected)
-                        binding.tvSendStatus.setTextColor(
-                            ContextCompat.getColor(this@MainActivity, R.color.gps_fix)
-                        )
-                    } else {
-                        binding.tvSendStatus.text = "服务器错误: ${response.code}"
-                        binding.tvSendStatus.setTextColor(
-                            ContextCompat.getColor(this@MainActivity, R.color.gps_no_fix)
-                        )
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                binding.tvSendStatus.text = "发送失败: ${e.localizedMessage?.take(30)}"
-                binding.tvSendStatus.setTextColor(
-                    ContextCompat.getColor(this@MainActivity, R.color.gps_no_fix)
-                )
-            }
+            binding.tvSendStatus.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+            GpsService.stop(this)
         }
     }
 
