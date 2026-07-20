@@ -25,11 +25,19 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+data class SatelliteInfo(
+    val svid: Int,
+    val cn0: Float,
+    val usedInFix: Boolean,
+    val constellation: String
+)
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var isSending = false
     private var gnssCallback: GnssStatus.Callback? = null
     private var satelliteCount = 0
+    private var satellites: List<SatelliteInfo> = emptyList()
     private var currentLocation: Location? = null
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -145,12 +154,30 @@ class MainActivity : AppCompatActivity() {
     private fun setupGnssCallback() {
         gnssCallback = object : GnssStatus.Callback() {
             override fun onSatelliteStatusChanged(status: GnssStatus) {
+                val list = mutableListOf<SatelliteInfo>()
                 var count = 0
                 var usedCount = 0
                 for (i in 0 until status.satelliteCount) {
                     count++
-                    if (status.usedInFix(i)) usedCount++
+                    val used = status.usedInFix(i)
+                    if (used) usedCount++
+                    list.add(SatelliteInfo(
+                        svid = status.getSvid(i),
+                        cn0 = status.getCn0Hz(i),
+                        usedInFix = used,
+                        constellation = when (status.getConstellationType(i)) {
+                            GnssStatus.CONSTELLATION_GPS -> "GPS"
+                            GnssStatus.CONSTELLATION_GLONASS -> "GLO"
+                            GnssStatus.CONSTELLATION_BEIDOU -> "BDS"
+                            GnssStatus.CONSTELLATION_GALILEO -> "GAL"
+                            GnssStatus.CONSTELLATION_QZSS -> "QZSS"
+                            GnssStatus.CONSTELLATION_IRNSS -> "IRN"
+                            GnssStatus.CONSTELLATION_SBAS -> "SBAS"
+                            else -> "?"
+                        }
+                    ))
                 }
+                satellites = list.sortedByDescending { it.cn0 }
                 satelliteCount = usedCount
                 binding.tvSatellites.text = "$usedCount / $count"
             }
@@ -297,6 +324,14 @@ class MainActivity : AppCompatActivity() {
         val json = JSONObject().apply {
             put("timestamp", System.currentTimeMillis())
             put("satellites", satelliteCount)
+            put("satellites_detail", JSONArray(satellites.map {
+                JSONObject().apply {
+                    put("svid", it.svid)
+                    put("cn0", it.cn0.toDouble())
+                    put("used", it.usedInFix)
+                    put("const", it.constellation)
+                }
+            }))
 
             if (loc != null) {
                 put("latitude", loc.latitude)

@@ -89,6 +89,21 @@
             opacity: 0.6;
         }
         .history-bar:hover { opacity: 1; }
+        .sat-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+        .sat-table th { text-align: left; color: #888; font-weight: 500; padding: 4px 8px; border-bottom: 1px solid #eee; }
+        .sat-table td { padding: 4px 8px; border-bottom: 1px solid #f5f5f5; font-family: monospace; }
+        .sat-used { color: #4caf50; }
+        .snr-bar { display: inline-block; width: 50px; height: 8px; background: #eee; border-radius: 2px; overflow: hidden; vertical-align: middle; margin-left: 6px; }
+        .snr-bar .fill { height: 100%; border-radius: 2px; }
+        .const-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; color: white; }
+        .const-GPS { background: #4caf50; }
+        .const-GLO { background: #ff9800; }
+        .const-BDS { background: #f44336; }
+        .const-GAL { background: #2196f3; }
+        .const-QZSS { background: #9c27b0; }
+        .const-IRN { background: #795548; }
+        .const-SBAS { background: #607d8b; }
+        .const-? { background: #999; }
         .info { text-align: center; color: #999; font-size: 13px; margin-top: 10px; }
         @media (max-width: 640px) {
             .dashboard { grid-template-columns: 1fr; }
@@ -131,6 +146,11 @@
             <div class="row"><span class="label">频率</span><span class="value" id="wifi_freq">-</span></div>
         </div>
 
+        <div class="card full">
+            <h2>卫星 SNR <span id="satCount" style="font-weight:normal;font-size:13px;color:#888"></span></h2>
+            <div id="satelliteTable"><div style="color:#999;font-size:13px">等待数据…</div></div>
+        </div>
+
         <div class="card">
             <h2>连接信息</h2>
             <div class="row"><span class="label">手机 IP</span><span class="value" id="phone_ip">-</span></div>
@@ -161,6 +181,11 @@
             el('gpsProvider').textContent = data.provider ? `来源: ${data.provider}` : '';
 
             el('satellites').textContent = data.satellites != null ? data.satellites : '-';
+            if (data.satellites_detail && data.satellites_detail.length > 0) {
+                renderSatellites(data.satellites_detail);
+            } else {
+                el('satelliteTable').innerHTML = '<div style="color:#999;font-size:13px">无卫星数据</div>';
+            }
             el('latitude').textContent = data.latitude != null ? `${data.latitude.toFixed(6)}°` : '-';
             el('longitude').textContent = data.longitude != null ? `${data.longitude.toFixed(6)}°` : '-';
             el('altitude').textContent = data.altitude != null ? `${data.altitude.toFixed(1)} m` : '-';
@@ -190,6 +215,29 @@
                 if (signalHistory.length > 100) signalHistory.shift();
                 renderSignalHistory();
             }
+        }
+
+        function renderSatellites(sats) {
+            const used = sats.filter(s => s.used).length;
+            el('satCount').textContent = `— ${used}/${sats.length} 锁定`;
+            const snrMin = Math.min(...sats.map(s => s.cn0));
+            const snrMax = Math.max(...sats.map(s => s.cn0));
+            const snrRange = Math.max(snrMax - snrMin, 1);
+            let html = `<table class="sat-table">
+                <tr><th>PRN</th><th>星座</th><th>SNR</th><th>状态</th></tr>`;
+            for (const s of sats) {
+                const pct = ((s.cn0 - snrMin) / snrRange) * 100;
+                const color = s.cn0 >= 40 ? '#4caf50' : (s.cn0 >= 25 ? '#ff9800' : '#f44336');
+                html += `<tr>
+                    <td>${s.svid}</td>
+                    <td><span class="const-badge const-${s.const}">${s.const}</span></td>
+                    <td>${s.cn0.toFixed(1)} dB-Hz <span class="snr-bar"><span class="fill" style="width:${pct}%;background:${color}"></span></span></td>
+                    <td class="${s.used ? 'sat-used' : ''}">${s.used ? '✓ 使用' : '○ 搜索'}</td>
+                </tr>`;
+            }
+            html += '</table>';
+            el('satelliteTable').innerHTML = html;
+            el('satCount').textContent = `— ${used}/${sats.length} 锁定`;
         }
 
         function renderSignalHistory() {
