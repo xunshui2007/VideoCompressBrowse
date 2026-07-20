@@ -12,12 +12,15 @@ latest_data = {}
 data_lock = threading.Lock()
 rssi_history = deque(maxlen=120)
 rssi_lock = threading.Lock()
+gpx_points = []
+gpx_lock = threading.Lock()
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 SESSION_START = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 CSV_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.csv')
 JSON_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.jsonl')
+GPX_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.gpx')
 _csv_header_lock = threading.Lock()
 
 BEARING_NAMES = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
@@ -25,12 +28,33 @@ BEARING_NAMES = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
 CONST_COLORS = {'GPS': '#2e7d32', 'GLO': '#e65100', 'BDS': '#c62828', 'GAL': '#1565c0',
                 'QZSS': '#6a1b9a', 'IRN': '#4e342e', 'SBAS': '#37474f'}
 CONST_TAGS = {'GPS': 'G', 'GLO': 'R', 'BDS': 'C', 'GAL': 'E', 'QZSS': 'J', 'IRN': 'I', 'SBAS': 'S'}
-BG = '#f0f2f5'
-CARD = '#ffffff'
-ACCENT = '#0078d4'
-TEXT = '#1a1a1a'
-SECONDARY = '#666666'
-BORDER = '#e0e0e0'
+BG = '#f0f2f5'; CARD = '#ffffff'; ACCENT = '#0078d4'; TEXT = '#1a1a1a'; SECONDARY = '#666666'; BORDER = '#e0e0e0'
+
+def fmt_ts(ts_str):
+    try:
+        t = datetime.strptime(ts_str, '%H:%M:%S')
+        return t.strftime('%Y-%m-%dT%H:%M:%SZ')
+    except: return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+def write_gpx():
+    with gpx_lock:
+        pts = list(gpx_points)
+    if not pts: return
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             '<gpx version="1.1" creator="GPSMonitor" xmlns="http://www.topografix.com/GPX/1/1">',
+             '  <trk><name>GPS Track</name><trkseg>']
+    for p in pts:
+        lat, lon, alt, spd, brg, sats, ts = p
+        lines.append(f'    <trkpt lat="{lat}" lon="{lon}">')
+        if alt: lines.append(f'      <ele>{alt}</ele>')
+        if spd: lines.append(f'      <speed>{spd}</speed>')
+        if brg: lines.append(f'      <course>{brg}</course>')
+        if sats: lines.append(f'      <sat>{sats}</sat>')
+        lines.append(f'      <time>{ts}</time>')
+        lines.append(f'    </trkpt>')
+    lines.append('  </trkseg></trk></gpx>')
+    with open(GPX_LOG, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
 
 def write_log(d):
     ts = d.get('received_at', datetime.now().strftime('%H:%M:%S'))
@@ -47,7 +71,16 @@ def write_log(d):
             w = csv.DictWriter(f, fieldnames=list(row.keys()))
             if not exists: w.writeheader()
             w.writerow(row)
+    lat, lon = d.get('latitude'), d.get('longitude')
+    if lat and lon:
+        with gpx_lock:
+            gpx_points.append((lat, lon, d.get('altitude'), d.get('speed'),
+                               d.get('bearing'), d.get('satellites'), fmt_ts(ts)))
+        if len(gpx_points) % 10 == 0:
+            write_gpx()
 
+def open_logs():
+    os.startfile(LOG_DIR)
 
 class GPSHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -67,7 +100,6 @@ class GPSHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({'ok': True}).encode())
 
     def do_GET(self):
-        self.send_response(404) if self.path != '/api/latest' else None
         if self.path == '/api/latest':
             with data_lock: resp = json.dumps({'data': latest_data})
             self.send_response(200)
@@ -94,16 +126,16 @@ def card(parent, title=None):
 class GPSMonitor:
     def __init__(self, root):
         self.root = root
-        root.title('GPS 实时监测')
-        root.geometry('900x720+150+30')
+        root.title('GPS 实时监测 — 轨迹导出: ' + os.path.basename(GPX_LOG))
+        root.geometry('900x750+150+30')
         root.configure(bg=BG)
         root.minsize(720, 540)
+        root.protocol('WM_DELETE_WINDOW', self._on_close)
 
         self._last_sat_key = ''
         self._last_chart_len = 0
         self.labels = {}
 
-        # === Top bar ===
         bar = tk.Frame(root, bg=BG)
         bar.pack(fill='x', padx=16, pady=(10, 4))
         tk.Label(bar, text='GPS 实时监测', font=('Segoe UI', 20, 'bold'),
@@ -112,40 +144,47 @@ class GPSMonitor:
         self.dot = tk.Canvas(bar, width=14, height=14, bg=BG, highlightthickness=0)
         self.dot.pack(side='right', padx=(8, 0))
         self.dot_oval = self.dot.create_oval(1, 1, 13, 13, fill='#bbb', outline='')
-
         self.update_time_lb = tk.Label(bar, text='--:--:--', font=('Segoe UI', 10),
                                         fg=SECONDARY, bg=BG)
         self.update_time_lb.pack(side='right')
 
-        # === Main content: two columns ===
         body = tk.Frame(root, bg=BG)
         body.pack(fill='both', expand=True, padx=16)
-
         left = tk.Frame(body, bg=BG)
         left.pack(side='left', fill='both', expand=True, padx=(0, 8))
-
         right = tk.Frame(body, bg=BG)
         right.pack(side='left', fill='both', expand=True, padx=(8, 0))
 
-        # GPS Status (left)
+        # GPS (left)
         c = card(left, 'GPS 状态')
-        lb = tk.Label(c, text='等待数据…', font=('Segoe UI', 28, 'bold'), fg='#bbb', bg=CARD)
-        lb.pack(anchor='w')
-        self.labels['gps'] = lb
-        lb2 = tk.Label(c, text='', font=('Segoe UI', 9), fg=SECONDARY, bg=CARD)
-        lb2.pack(anchor='w')
-        self.labels['provider'] = lb2
+        self.labels['gps'] = tk.Label(c, text='等待数据…', font=('Segoe UI', 28, 'bold'),
+                                       fg='#bbb', bg=CARD)
+        self.labels['gps'].pack(anchor='w')
+        self.labels['provider'] = tk.Label(c, text='', font=('Segoe UI', 9), fg=SECONDARY, bg=CARD)
+        self.labels['provider'].pack(anchor='w')
+
+        # Accuracy (left)
+        c = card(left, '定位精度')
+        self.labels['acc_val'] = tk.Label(c, text='-', font=('Segoe UI', 22, 'bold'),
+                                           fg=TEXT, bg=CARD)
+        self.labels['acc_val'].pack(anchor='w')
+        self.labels['acc_desc'] = tk.Label(c, text='', font=('Segoe UI', 9),
+                                            fg=SECONDARY, bg=CARD)
+        self.labels['acc_desc'].pack(anchor='w')
+        # Accuracy bar
+        self.acc_bar = tk.Canvas(c, height=6, bg='#e0e0e0', highlightthickness=0)
+        self.acc_bar.pack(fill='x', pady=(4, 0))
+        self.acc_bar_fill = self.acc_bar.create_rectangle(0, 0, 0, 6, width=0)
 
         # Coordinates (left)
         c = card(left, '坐标')
-        for key, name in [('lat', '纬度'), ('lon', '经度'), ('alt', '海拔'), ('acc', '精度')]:
+        for key, name in [('lat', '纬度'), ('lon', '经度'), ('alt', '海拔')]:
             r = tk.Frame(c, bg=CARD)
             r.pack(fill='x', pady=1)
             tk.Label(r, text=name, font=('Segoe UI', 9), fg=SECONDARY, bg=CARD,
                      width=5, anchor='w').pack(side='left')
-            lb = tk.Label(r, text='-', font=('Consolas', 12, 'bold'), fg=TEXT, bg=CARD)
-            lb.pack(side='left')
-            self.labels[key] = lb
+            self.labels[key] = tk.Label(r, text='-', font=('Consolas', 12, 'bold'), fg=TEXT, bg=CARD)
+            self.labels[key].pack(side='left')
 
         # WiFi (right)
         c = card(right, 'WiFi 信号')
@@ -153,7 +192,6 @@ class GPSMonitor:
         self.labels['wifi_ssid'].pack(anchor='w')
         self.labels['wifi_rssi'] = tk.Label(c, text='-', font=('Segoe UI', 12), fg=SECONDARY, bg=CARD)
         self.labels['wifi_rssi'].pack(anchor='w')
-        # WiFi bar
         self.wbar = tk.Canvas(c, height=8, bg='#e0e0e0', highlightthickness=0)
         self.wbar.pack(fill='x', pady=(4, 0))
         self.wbar_fill = self.wbar.create_rectangle(0, 0, 0, 8, fill=ACCENT, width=0)
@@ -165,8 +203,8 @@ class GPSMonitor:
         for key, name in [('speed', '速度'), ('bearing', '方向')]:
             sub = tk.Frame(fr, bg=CARD)
             sub.pack(side='left', fill='x', expand=True)
-            tk.Label(sub, text=name, font=('Segoe UI', 9), fg=SECONDARY,
-                     bg=CARD, anchor='w').pack(anchor='w')
+            tk.Label(sub, text=name, font=('Segoe UI', 9), fg=SECONDARY, bg=CARD,
+                     anchor='w').pack(anchor='w')
             self.labels[key] = tk.Label(sub, text='-', font=('Segoe UI', 20, 'bold'),
                                          fg=TEXT, bg=CARD, anchor='w')
             self.labels[key].pack(anchor='w')
@@ -174,17 +212,25 @@ class GPSMonitor:
                                                fg=SECONDARY, bg=CARD)
         self.labels['bearing_dir'].pack(anchor='w')
 
-        # Connection (right)
+        # Connection & Export (right)
         c = card(right, '连接')
         self.labels['phone_ip'] = tk.Label(c, text='-', font=('Consolas', 10), fg=TEXT, bg=CARD)
         self.labels['phone_ip'].pack(anchor='w')
         self.labels['sats'] = tk.Label(c, text='-', font=('Segoe UI', 10), fg=TEXT, bg=CARD)
         self.labels['sats'].pack(anchor='w', pady=(2, 0))
 
-        # === Satellite table (full width) ===
+        btn_row = tk.Frame(c, bg=CARD)
+        btn_row.pack(fill='x', pady=(6, 0))
+        tk.Button(btn_row, text='📂 打开日志目录', command=open_logs,
+                  font=('Segoe UI', 9), bg='#f0f2f5', fg=TEXT, bd=1,
+                  relief='solid', cursor='hand2').pack(side='left', padx=(0, 6))
+        tk.Button(btn_row, text='⬇ 导出 GPX', command=self._export_gpx,
+                  font=('Segoe UI', 9), bg=ACCENT, fg='white', bd=0,
+                  cursor='hand2').pack(side='left')
+
+        # Satellite table (full)
         sat_outer = tk.Frame(body, bg=BG)
         sat_outer.pack(fill='both', expand=True, pady=(4, 0))
-
         hdr = tk.Frame(sat_outer, bg=BG)
         hdr.pack(fill='x')
         tk.Label(hdr, text='卫星 SNR', font=('Segoe UI', 9, 'bold'),
@@ -207,7 +253,7 @@ class GPSMonitor:
             self.tree.tag_configure(tag, foreground=color)
         self.tree.pack(fill='both', expand=True)
 
-        # === Signal chart ===
+        # Chart
         chart_frame = tk.Frame(body, bg=BG)
         chart_frame.pack(fill='x', pady=(6, 0))
         tk.Label(chart_frame, text='WiFi 信号强度历史', font=('Segoe UI', 9, 'bold'),
@@ -216,12 +262,22 @@ class GPSMonitor:
                                 highlightbackground=BORDER, highlightthickness=1)
         self.chart.pack(fill='x')
 
-        # === Status bar ===
+        # Status bar
         status = tk.Frame(root, bg='#e8e8e8')
         status.pack(fill='x', padx=16, pady=(6, 8))
-        self.status_lb = tk.Label(status, text='监听 0.0.0.0:3000 | 日志: ' + os.path.basename(CSV_LOG),
-                                   font=('Segoe UI', 8), fg='#999', bg='#e8e8e8')
+        self.status_lb = tk.Label(status, text='监听 0.0.0.0:3000', font=('Segoe UI', 8),
+                                   fg='#999', bg='#e8e8e8')
         self.status_lb.pack()
+
+    def _export_gpx(self):
+        write_gpx()
+        self.status_lb.configure(text=f'GPX 已导出: {GPX_LOG}')
+        self.root.after(3000, lambda: self.status_lb.configure(
+            text='监听 0.0.0.0:3000'))
+
+    def _on_close(self):
+        write_gpx()
+        self.root.destroy()
 
     def update(self):
         try:
@@ -246,8 +302,7 @@ class GPSMonitor:
         spd = d.get('speed'); brg = d.get('bearing')
         sats_cnt = d.get('satellites', 0)
         prov = d.get('provider', '')
-        rssi = d.get('wifi_rssi')
-        ssid = d.get('wifi_ssid', '')
+        rssi = d.get('wifi_rssi'); ssid = d.get('wifi_ssid', '')
 
         gps_ok = lat is not None and (acc is None or acc < 100)
         if gps_ok:
@@ -258,10 +313,31 @@ class GPSMonitor:
             self.labels['gps'].configure(text='搜索卫星…', fg='#c62828')
         self.labels['provider'].configure(text=f'来源: {prov}' if prov else '')
 
+        # Accuracy display
+        if acc:
+            self.labels['acc_val'].configure(
+                text=f'{acc:.1f} m',
+                fg='#2e7d32' if acc < 10 else '#e65100' if acc < 50 else '#c62828')
+            if acc < 3: desc = '极高精度 ✓'
+            elif acc < 10: desc = '高精度 ✓'
+            elif acc < 30: desc = '中等精度'
+            elif acc < 100: desc = '低精度 ⚠'
+            else: desc = '不可靠 ✗'
+            if sats_cnt: desc += f' | 卫星: {sats_cnt}'
+            self.labels['acc_desc'].configure(text=desc)
+
+            err_pct = max(0, min(100, 100 - acc * 2))
+            bw = max(self.acc_bar.winfo_width() - 2, 100)
+            self.acc_bar.coords(self.acc_bar_fill, 1, 1, 1 + int(bw * err_pct / 100), 5)
+            err_color = '#4caf50' if acc < 10 else '#ff9800' if acc < 50 else '#f44336'
+            self.acc_bar.itemconfig(self.acc_bar_fill, fill=err_color)
+        else:
+            self.labels['acc_val'].configure(text='-', fg=TEXT)
+            self.labels['acc_desc'].configure(text='')
+
         for key, val in [('lat', f'{lat:.6f}°' if lat else '-'),
                          ('lon', f'{lon:.6f}°' if lon else '-'),
-                         ('alt', f'{alt:.1f} m' if alt else '-'),
-                         ('acc', f'{acc:.1f} m' if acc else '-')]:
+                         ('alt', f'{alt:.1f} m' if alt else '-')]:
             self.labels[key].configure(text=val)
 
         self.labels['speed'].configure(text=f'{spd:.1f}' if spd and spd > 0 else '0.0')
@@ -283,13 +359,11 @@ class GPSMonitor:
             self.wbar.itemconfig(self.wbar_fill, fill=color)
         else:
             self.labels['wifi_rssi'].configure(text='-', fg=SECONDARY)
-            self.wbar.coords(self.wbar_fill, 1, 1, 1, 7)
 
         self.labels['phone_ip'].configure(text=f'手机: {d.get("phone_ip", "-")}')
-        self.labels['sats'].configure(text=f'卫星: {sats_cnt} 锁定  |  '
-                                           f'提供者: {prov or "?"}')
+        self.labels['sats'].configure(text=f'卫星: {sats_cnt} 锁定  |  {prov or "?"}')
 
-        # Satellite table
+        # Sat table
         raw = d.get('satellites_detail', [])
         if not isinstance(raw, list): raw = []
         sat_key = json.dumps(raw, sort_keys=True)
