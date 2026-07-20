@@ -135,8 +135,7 @@ class GPSMonitor:
         top.pack(fill='x')
 
         # Left: GPS Status card
-        gps_card = self._card(top, 'GPS 状态')
-        gps_card.pack(side='left', fill='both', expand=True, padx=(0, 6))
+        gps_card = self._card(top, 'GPS 状态', side='left', fill='both', expand=True, padx=(0, 6))
         self.gps_text = tk.Label(gps_card, text='等待数据…',
                                   font=('Segoe UI', 22, 'bold'), fg='#ff9800', bg='white')
         self.gps_text.pack(anchor='w', pady=(0, 2))
@@ -148,8 +147,7 @@ class GPSMonitor:
         self.sat_count_text.pack(anchor='w', pady=(4, 0))
 
         # Right: Coordinates card
-        coord_card = self._card(top, '坐标')
-        coord_card.pack(side='left', fill='both', expand=True, padx=(6, 0))
+        coord_card = self._card(top, '坐标', side='left', fill='both', expand=True, padx=(6, 0))
         self.coord_labels = {}
         for label, key in [('纬度', 'latitude'), ('经度', 'longitude'),
                             ('海拔', 'altitude'), ('精度', 'accuracy')]:
@@ -165,16 +163,14 @@ class GPSMonitor:
         mid = tk.Frame(scroll_frame, bg='#f0f2f5')
         mid.pack(fill='x', pady=(6, 0))
 
-        speed_card = self._card(mid, '速度')
-        speed_card.pack(side='left', fill='both', expand=True, padx=(0, 6))
+        speed_card = self._card(mid, '速度', side='left', fill='both', expand=True, padx=(0, 6))
         self.speed_text = tk.Label(speed_card, text='0.0',
                                     font=('Segoe UI', 20, 'bold'), fg='#333', bg='white')
         self.speed_text.pack(anchor='w')
         tk.Label(speed_card, text='m/s', font=('Segoe UI', 9),
                  fg='#888', bg='white').pack(anchor='w')
 
-        bear_card = self._card(mid, '方向')
-        bear_card.pack(side='left', fill='both', expand=True, padx=(6, 0))
+        bear_card = self._card(mid, '方向', side='left', fill='both', expand=True, padx=(6, 0))
         self.bearing_text = tk.Label(bear_card, text='-',
                                       font=('Segoe UI', 20, 'bold'), fg='#333', bg='white')
         self.bearing_text.pack(anchor='w')
@@ -184,7 +180,6 @@ class GPSMonitor:
 
         # === WiFi card ===
         wifi_card = self._card(scroll_frame, 'WiFi 信号')
-        wifi_card.pack(fill='x', pady=(6, 0))
         wifi_grid = tk.Frame(wifi_card, bg='white')
         wifi_grid.pack(fill='x')
         self.wifi_ssid_text = tk.Label(wifi_grid, text='-', font=('Consolas', 11, 'bold'),
@@ -206,14 +201,12 @@ class GPSMonitor:
 
         # === RSSI History chart ===
         chart_card = self._card(scroll_frame, '信号强度历史 (最近 120 秒)')
-        chart_card.pack(fill='x', pady=(6, 0))
         self.chart = tk.Canvas(chart_card, height=80, bg='white',
                                 highlightthickness=0)
         self.chart.pack(fill='x')
 
         # === Satellite table ===
         sat_card = self._card(scroll_frame, '卫星 SNR')
-        sat_card.pack(fill='x', pady=(6, 0))
         self.sat_count_label = tk.Label(sat_card, text='等待数据…',
                                          font=('Segoe UI', 9), fg='#888', bg='white')
         self.sat_count_label.pack(anchor='w', pady=(0, 4))
@@ -232,7 +225,6 @@ class GPSMonitor:
 
         # === Connection info ===
         conn_card = self._card(scroll_frame, '连接信息')
-        conn_card.pack(fill='x', pady=(6, 16))
         self.phone_ip_text = tk.Label(conn_card, text='-',
                                        font=('Consolas', 10), fg='#333', bg='white')
         self.phone_ip_text.pack(anchor='w')
@@ -243,9 +235,10 @@ class GPSMonitor:
                                   font=('Segoe UI', 8), fg='#aaa', bg='white')
         self.log_text.pack(anchor='w', pady=(2, 0))
 
-    def _card(self, parent, title):
+    def _card(self, parent, title, **pack_opts):
         f = tk.Frame(parent, bg='white', bd=0, highlightthickness=1,
                      highlightcolor='#e0e0e0', highlightbackground='#e0e0e0')
+        f.pack(fill='x', pady=(0, 6), **pack_opts)
         tk.Label(f, text=title, font=('Segoe UI', 10, 'bold'),
                  fg='#555', bg='white', anchor='w').pack(fill='x', padx=12, pady=(8, 4))
         c = tk.Frame(f, bg='white')
