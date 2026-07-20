@@ -78,3 +78,18 @@ cd android/
 - 转码需要设备 CPU/GPU，低端机型大文件可能耗时较长
 - **v1 无声**: 音频轨道不转码（仅视频降帧）
 - MediaCodec 编码质量取决于设备硬件编码器
+
+## GPS 信号测试
+
+`gps_app/` — Android APK，读取 GPS 卫星 SNR、坐标、WiFi 信号，通过 HTTP POST 发送到电脑
+
+`gps_desktop/gps_monitor.py` — Python 桌面程序（tkinter 界面），接收并显示 GPS/WiFi 数据
+
+使用方式：
+```bash
+cd gps_desktop
+python gps_monitor.py          # GUI 模式
+python gps_monitor.py --console # 控制台模式（无界面）
+```
+
+旧版 Node.js 服务器在 `gps_server/` 目录。

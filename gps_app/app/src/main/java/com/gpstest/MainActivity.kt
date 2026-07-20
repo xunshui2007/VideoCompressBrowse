@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
                     if (used) usedCount++
                     list.add(SatelliteInfo(
                         svid = status.getSvid(i),
-                        cn0 = status.getCn0Hz(i),
+                        cn0 = status.getCn0DbHz(i),
                         usedInFix = used,
                         constellation = when (status.getConstellationType(i)) {
                             GnssStatus.CONSTELLATION_GPS -> "GPS"
