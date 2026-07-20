@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import threading
@@ -17,16 +18,12 @@ os.makedirs(LOG_DIR, exist_ok=True)
 SESSION_START = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 CSV_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.csv')
 JSON_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.jsonl')
-_csv_header_written = False
 _csv_header_lock = threading.Lock()
 
 def write_log(d):
-    global _csv_header_written
     ts = d.get('received_at', datetime.now().strftime('%H:%M:%S'))
-    # JSONL
     with open(JSON_LOG, 'a', encoding='utf-8') as f:
         f.write(json.dumps(d, ensure_ascii=False) + '\n')
-    # CSV
     row = {
         'time': ts, 'lat': d.get('latitude'), 'lon': d.get('longitude'),
         'alt': d.get('altitude'), 'acc': d.get('accuracy'),
@@ -37,9 +34,7 @@ def write_log(d):
     }
     with _csv_header_lock:
         exists = os.path.exists(CSV_LOG) and os.path.getsize(CSV_LOG) > 0
-        mode = 'a' if exists else 'w'
-        with open(CSV_LOG, mode, encoding='utf-8', newline='') as f:
-            import csv
+        with open(CSV_LOG, 'a' if exists else 'w', encoding='utf-8', newline='') as f:
             w = csv.DictWriter(f, fieldnames=list(row.keys()))
             if not exists:
                 w.writeheader()
@@ -99,12 +94,6 @@ class GPSMonitor:
         root.minsize(720, 500)
 
         self.sat_tree = None
-        self.fix_indicator = None
-
-        style = ttk.Style()
-        style.theme_use('clam')
-        for c in ['#f0f2f5', '#4caf50', '#f44336', '#ff9800', '#333', '#888', '#1a73e8', 'white']:
-            style.configure(c, background=c) if c != 'white' else None
 
         # === Header ===
         header = tk.Frame(root, bg='#f0f2f5')
@@ -214,6 +203,8 @@ class GPSMonitor:
         cols = ('PRN', '星座', 'SNR', '信号', '状态')
         self.sat_tree = ttk.Treeview(sat_card, columns=cols, show='headings',
                                       height=8, selectmode='none')
+        for c, color in CONST_COLORS.items():
+            self.sat_tree.tag_configure(c, foreground=color)
         for c in cols:
             self.sat_tree.heading(c, text=c)
         self.sat_tree.column('PRN', width=50, anchor='center')
@@ -344,12 +335,7 @@ class GPSMonitor:
                     const = s.get('const', '?')
                     svid = s.get('svid', '?')
                     used_f = '✓' if s.get('used', False) else '○'
-                    cc = CONST_COLORS.get(const, '#999')
-
-                    # Signal bar
                     bar_pct = max(0, min(100, cn0 * 2.5))
-                    bar_color = '#4caf50' if cn0 >= 40 else '#ff9800' if cn0 >= 25 else '#f44336'
-
                     self.sat_tree.insert('', 'end', values=(
                         svid,
                         f'{const}',
@@ -357,9 +343,6 @@ class GPSMonitor:
                         f'{"█" * int(bar_pct / 10)}{"▒" * (10 - int(bar_pct / 10))}',
                         used_f
                     ), tags=(const,))
-                # Color rows by constellation
-                for c in CONST_COLORS:
-                    self.sat_tree.tag_configure(c, foreground=CONST_COLORS[c])
             else:
                 self.sat_count_label.configure(text='无卫星数据')
 
