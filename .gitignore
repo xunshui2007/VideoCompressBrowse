@@ -34,4 +34,5 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+gps_desktop/logs/
 

@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -10,6 +11,39 @@ latest_data = {}
 data_lock = threading.Lock()
 rssi_history = deque(maxlen=120)
 rssi_lock = threading.Lock()
+
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+SESSION_START = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+CSV_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.csv')
+JSON_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.jsonl')
+_csv_header_written = False
+_csv_header_lock = threading.Lock()
+
+def write_log(d):
+    global _csv_header_written
+    ts = d.get('received_at', datetime.now().strftime('%H:%M:%S'))
+    # JSONL
+    with open(JSON_LOG, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(d, ensure_ascii=False) + '\n')
+    # CSV
+    row = {
+        'time': ts, 'lat': d.get('latitude'), 'lon': d.get('longitude'),
+        'alt': d.get('altitude'), 'acc': d.get('accuracy'),
+        'speed': d.get('speed'), 'bearing': d.get('bearing'),
+        'sats': d.get('satellites'), 'provider': d.get('provider'),
+        'wifi_ssid': d.get('wifi_ssid'), 'wifi_rssi': d.get('wifi_rssi'),
+        'wifi_freq': d.get('wifi_frequency'), 'phone_ip': d.get('phone_ip')
+    }
+    with _csv_header_lock:
+        exists = os.path.exists(CSV_LOG) and os.path.getsize(CSV_LOG) > 0
+        mode = 'a' if exists else 'w'
+        with open(CSV_LOG, mode, encoding='utf-8', newline='') as f:
+            import csv
+            w = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if not exists:
+                w.writeheader()
+            w.writerow(row)
 
 CONST_COLORS = {
     'GPS': '#4caf50', 'GLO': '#ff9800', 'BDS': '#f44336',
@@ -30,6 +64,7 @@ class GPSHandler(BaseHTTPRequestHandler):
             d['received_at'] = datetime.now().strftime('%H:%M:%S')
             latest_data.clear()
             latest_data.update(d)
+        write_log(d)
         with rssi_lock:
             rssi = d.get('wifi_rssi')
             if rssi is not None:
@@ -204,6 +239,9 @@ class GPSMonitor:
         self.last_upd_text = tk.Label(conn_card, text='-',
                                        font=('Segoe UI', 9), fg='#888', bg='white')
         self.last_upd_text.pack(anchor='w', pady=(2, 0))
+        self.log_text = tk.Label(conn_card, text=f'日志: {CSV_LOG}',
+                                  font=('Segoe UI', 8), fg='#aaa', bg='white')
+        self.log_text.pack(anchor='w', pady=(2, 0))
 
     def _card(self, parent, title):
         f = tk.Frame(parent, bg='white', bd=0, highlightthickness=1,
