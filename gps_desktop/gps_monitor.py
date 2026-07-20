@@ -7,12 +7,16 @@ from tkinter import ttk
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from collections import deque
+import time as _time_mod
 
 latest_data = {}
 data_lock = threading.Lock()
 rssi_history = deque(maxlen=120)
 rssi_lock = threading.Lock()
 gpx_points = []
+request_count = 0
+request_lock = threading.Lock()
+last_contact = 0.0
 gpx_lock = threading.Lock()
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
@@ -88,6 +92,10 @@ class GPSHandler(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers(); return
         d = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         d['received_at'] = datetime.now().strftime('%H:%M:%S')
+        with request_lock:
+            global request_count, last_contact
+            request_count += 1
+            last_contact = _time_mod.time()
         with data_lock:
             latest_data.clear(); latest_data.update(d)
         write_log(d)
@@ -224,6 +232,16 @@ class GPSMonitor:
         self.labels['sats'] = tk.Label(c, text='-', font=('Segoe UI', 10), fg=TEXT, bg=CARD)
         self.labels['sats'].pack(anchor='w', pady=(2, 0))
 
+        # Connection indicator
+        conn_status = tk.Frame(c, bg=CARD)
+        conn_status.pack(fill='x', pady=(4, 0))
+        self.conn_dot = tk.Canvas(conn_status, width=10, height=10, bg=CARD, highlightthickness=0)
+        self.conn_dot.pack(side='left', padx=(0, 6))
+        self.conn_dot_oval = self.conn_dot.create_oval(1, 1, 9, 9, fill='#bbb', outline='')
+        self.conn_label = tk.Label(conn_status, text='等待手机连接…', font=('Segoe UI', 9),
+                                    fg=SECONDARY, bg=CARD)
+        self.conn_label.pack(side='left')
+
         self.data_status = tk.Label(c, text='', font=('Segoe UI', 9), fg=SECONDARY, bg=CARD)
         self.data_status.pack(anchor='w')
 
@@ -296,6 +314,22 @@ class GPSMonitor:
             self.root.after(500, self.update)
 
     def _refresh(self):
+        # Connection status (always show, even without GPS data)
+        with request_lock:
+            rc = request_count
+            lc = last_contact
+        if rc > 0:
+            elapsed = _time_mod.time() - lc
+            if elapsed < 5:
+                self.conn_dot.itemconfig(self.conn_dot_oval, fill='#4caf50')
+                self.conn_label.configure(text=f'已连接 ({rc} 次请求)')
+            else:
+                self.conn_dot.itemconfig(self.conn_dot_oval, fill='#ff9800')
+                self.conn_label.configure(text=f'上次连接 {elapsed:.0f}s 前 ({rc} 次)')
+        else:
+            self.conn_dot.itemconfig(self.conn_dot_oval, fill='#bbb')
+            self.conn_label.configure(text='等待手机连接…')
+
         with data_lock:
             d = dict(latest_data)
         if not d:
