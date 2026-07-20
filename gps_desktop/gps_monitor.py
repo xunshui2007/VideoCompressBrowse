@@ -1,522 +1,350 @@
-import csv
-import json
-import os
-import threading
-import tkinter as tk
+import json, os, threading, tkinter as tk
 from tkinter import ttk
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from collections import deque
-import time as _time_mod
 
-latest_data = {}
-data_lock = threading.Lock()
-rssi_history = deque(maxlen=120)
-rssi_lock = threading.Lock()
-gpx_points = []
-request_count = 0
-request_lock = threading.Lock()
-last_contact = 0.0
-gpx_lock = threading.Lock()
+latest = {}; lock = threading.Lock(); count = 0; start_t = datetime.now()
+rssi_hist = deque(maxlen=120); gpx_pts = []
+BEARING = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW']
+CONST_C = {'GPS':'#267f4e','GLO':'#e8590c','BDS':'#e03131','GAL':'#1971c2','QZSS':'#9c36b5','IRN':'#6f4e37','SBAS':'#495057'}
+CONST_E = {'GPS':'🟢GPS','GLO':'🟠GLO','BDS':'🔴BDS','GAL':'🔵GAL','QZSS':'🟣QZ','IRN':'🟤IR','SBAS':'⚪SB'}
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
-os.makedirs(LOG_DIR, exist_ok=True)
-SESSION_START = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-CSV_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.csv')
-JSON_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.jsonl')
-GPX_LOG = os.path.join(LOG_DIR, f'gps_{SESSION_START}.gpx')
-_csv_header_lock = threading.Lock()
+def snr_color(v):
+    if v >= 40: return '#099268'  # excellent
+    if v >= 30: return '#2f9e44'  # good
+    if v >= 20: return '#f08c00'  # fair
+    if v >= 10: return '#e8590c'  # weak
+    return '#e03131'              # poor
 
-BEARING_NAMES = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
-                 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
-CONST_COLORS = {'GPS': '#2e7d32', 'GLO': '#e65100', 'BDS': '#c62828', 'GAL': '#1565c0',
-                'QZSS': '#6a1b9a', 'IRN': '#4e342e', 'SBAS': '#37474f'}
-CONST_TAGS = {'GPS': 'G', 'GLO': 'R', 'BDS': 'C', 'GAL': 'E', 'QZSS': 'J', 'IRN': 'I', 'SBAS': 'S'}
-BG = '#f0f2f5'; CARD = '#ffffff'; ACCENT = '#0078d4'; TEXT = '#1a1a1a'; SECONDARY = '#666666'; BORDER = '#e0e0e0'
-
-def fmt_ts(ts_str):
-    try:
-        t = datetime.strptime(ts_str, '%H:%M:%S')
-        return t.strftime('%Y-%m-%dT%H:%M:%SZ')
-    except: return datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+def rssi_color(v):
+    if v is None: return '#6c7086'
+    if v >= -50: return '#099268'
+    if v >= -67: return '#2f9e44'
+    if v >= -80: return '#f08c00'
+    return '#e03131'
+LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(LOG, exist_ok=True)
+S = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+CSV = os.path.join(LOG, f'gps_{S}.csv'); GPX = os.path.join(LOG, f'gps_{S}.gpx'); JSONL = os.path.join(LOG, f'gps_{S}.jsonl')
 
 def write_gpx():
-    with gpx_lock:
-        pts = list(gpx_points)
-    if not pts: return
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-             '<gpx version="1.1" creator="GPSMonitor" xmlns="http://www.topografix.com/GPX/1/1">',
-             '  <trk><name>GPS Track</name><trkseg>']
-    for p in pts:
-        lat, lon, alt, spd, brg, sats, ts = p
-        lines.append(f'    <trkpt lat="{lat}" lon="{lon}">')
-        if alt: lines.append(f'      <ele>{alt}</ele>')
-        if spd: lines.append(f'      <speed>{spd}</speed>')
-        if brg: lines.append(f'      <course>{brg}</course>')
-        if sats: lines.append(f'      <sat>{sats}</sat>')
-        lines.append(f'      <time>{ts}</time>')
-        lines.append(f'    </trkpt>')
-    lines.append('  </trkseg></trk></gpx>')
-    with open(GPX_LOG, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
+    if not gpx_pts: return
+    l = ['<?xml version="1.0"?><gpx version="1.1" creator="GPSMonitor"><trk><name>Track</name><trkseg>']
+    for p in gpx_pts:
+        l.append(f'<trkpt lat="{p[0]}" lon="{p[1]}">{"<ele>%.1f</ele>"%p[2] if p[2] else ""}<time>{p[3]}</time></trkpt>')
+    l.append('</trkseg></trk></gpx>')
+    with open(GPX, 'w') as f: f.write('\n'.join(l))
 
-def write_log(d):
-    ts = d.get('received_at', datetime.now().strftime('%H:%M:%S'))
-    with open(JSON_LOG, 'a', encoding='utf-8') as f:
-        f.write(json.dumps(d, ensure_ascii=False) + '\n')
-    row = {'time': ts, 'lat': d.get('latitude'), 'lon': d.get('longitude'),
-           'alt': d.get('altitude'), 'acc': d.get('accuracy'), 'speed': d.get('speed'),
-           'bearing': d.get('bearing'), 'sats': d.get('satellites'),
-           'wifi_ssid': d.get('wifi_ssid'), 'wifi_rssi': d.get('wifi_rssi'),
-           'wifi_freq': d.get('wifi_frequency'), 'phone_ip': d.get('phone_ip')}
-    with _csv_header_lock:
-        exists = os.path.exists(CSV_LOG) and os.path.getsize(CSV_LOG) > 0
-        with open(CSV_LOG, 'a' if exists else 'w', encoding='utf-8', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=list(row.keys()))
-            if not exists: w.writeheader()
-            w.writerow(row)
-    lat, lon = d.get('latitude'), d.get('longitude')
-    if lat and lon:
-        with gpx_lock:
-            gpx_points.append((lat, lon, d.get('altitude'), d.get('speed'),
-                               d.get('bearing'), d.get('satellites'), fmt_ts(ts)))
-        if len(gpx_points) % 10 == 0:
-            write_gpx()
-
-def open_logs():
-    os.startfile(LOG_DIR)
-
-class GPSHandler(BaseHTTPRequestHandler):
+class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path != '/api/gps':
-            self.send_response(404); self.end_headers(); return
+        global count
+        if self.path != '/api/gps': self.send_response(404); self.end_headers(); return
         d = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-        d['received_at'] = datetime.now().strftime('%H:%M:%S')
-        with request_lock:
-            global request_count, last_contact
-            request_count += 1
-            last_contact = _time_mod.time()
-        with data_lock:
-            latest_data.clear(); latest_data.update(d)
-        write_log(d)
-        with rssi_lock:
-            r = d.get('wifi_rssi')
-            if r is not None: rssi_history.append(r)
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps({'ok': True}).encode())
-
+        d['ts'] = datetime.now().strftime('%H:%M:%S')
+        count += 1
+        with lock: latest.clear(); latest.update(d)
+        if d.get('wifi_rssi'): rssi_hist.append(d['wifi_rssi'])
+        lat, lon = d.get('latitude'), d.get('longitude')
+        if lat and lon:
+            gpx_pts.append((lat, lon, d.get('altitude'), d['ts']))
+            if len(gpx_pts) % 10 == 0: write_gpx()
+        with open(JSONL, 'a') as f: f.write(json.dumps(d)+'\n')
+        with open(CSV, 'a') as f:
+            if os.path.getsize(CSV) == 0: f.write('time,lat,lon,alt,acc,prov,sats,wifi\n')
+            f.write(f'{d["ts"]},{lat},{lon},{d.get("altitude")},{d.get("accuracy")},{d.get("provider")},{d.get("satellites")},{d.get("wifi_rssi")}\n')
+        print(f'[{count}] lat={lat} prov={d.get("provider")}')
+        self.send_response(200); self.end_headers(); self.wfile.write(json.dumps({'ok':True,'n':count}).encode())
     def do_GET(self):
-        if self.path == '/api/latest':
-            with data_lock: resp = json.dumps({'data': latest_data})
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(resp.encode())
-        else:
-            self.send_response(404); self.end_headers()
+        with lock: resp = json.dumps({'data': latest, 'n': count})
+        self.send_response(200); self.end_headers(); self.wfile.write(resp.encode())
+    def log_message(self, *a): pass
 
-    def log_message(self, *args): pass
-
-
-def card(parent, title=None):
-    f = tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
-    f.pack(fill='x', pady=4)
-    if title:
-        tk.Label(f, text=title, font=('Segoe UI', 9, 'bold'), fg=SECONDARY, bg=CARD,
-                 anchor='w').pack(fill='x', padx=14, pady=(8, 2))
-    body = tk.Frame(f, bg=CARD)
-    body.pack(fill='x', padx=14, pady=(2, 8))
-    return body
-
-
-class GPSMonitor:
+class App:
     def __init__(self, root):
         self.root = root
-        root.title('GPS 实时监测 — 轨迹导出: ' + os.path.basename(GPX_LOG))
-        root.geometry('900x750+150+30')
-        root.configure(bg=BG)
-        root.minsize(720, 540)
-        root.protocol('WM_DELETE_WINDOW', self._on_close)
+        root.title(f'GPS 信号监测 — {os.path.basename(GPX)}')
+        root.geometry('860x700+80+10')
+        root.configure(bg='#1a1d23'); root.minsize(700, 540)
+        self._sat_key = ''; self._chart_n = 0; self.lb = {}
 
-        self._last_sat_key = ''
-        self._last_chart_len = 0
-        self.labels = {}
-
-        bar = tk.Frame(root, bg=BG)
+        # === Top bar (dark) ===
+        bar = tk.Frame(root, bg='#1a1d23')
         bar.pack(fill='x', padx=16, pady=(10, 4))
-        tk.Label(bar, text='GPS 实时监测', font=('Segoe UI', 20, 'bold'),
-                 fg=ACCENT, bg=BG).pack(side='left')
+        tk.Label(bar, text='🛰️  GPS 信号监测', font=('Segoe UI', 16, 'bold'), fg='#89b4fa', bg='#1a1d23').pack(side='left')
 
-        self.dot = tk.Canvas(bar, width=14, height=14, bg=BG, highlightthickness=0)
-        self.dot.pack(side='right', padx=(8, 0))
-        self.dot_oval = self.dot.create_oval(1, 1, 13, 13, fill='#bbb', outline='')
-        self.update_time_lb = tk.Label(bar, text='--:--:--', font=('Segoe UI', 10),
-                                        fg=SECONDARY, bg=BG)
-        self.update_time_lb.pack(side='right')
+        self.srv_dot = tk.Canvas(bar, width=12, height=12, bg='#1a1d23', highlightthickness=0)
+        self.srv_dot.pack(side='right', padx=(6,0))
+        self._dot = self.srv_dot.create_oval(1, 1, 11, 11, fill='#585b70', outline='')
+        self.srv_lb = tk.Label(bar, text='检测中', font=('Segoe UI', 9), fg='#6c7086', bg='#1a1d23')
+        self.srv_lb.pack(side='right')
+        self.elapsed_lb = tk.Label(bar, text='', font=('Segoe UI', 9), fg='#585b70', bg='#1a1d23')
+        self.elapsed_lb.pack(side='right', padx=(0, 12))
 
-        body = tk.Frame(root, bg=BG)
-        body.pack(fill='both', expand=True, padx=16)
+        # === Main body ===
+        body = tk.Frame(root, bg='#1a1d23')
+        body.pack(fill='both', expand=True, padx=12, pady=(0, 10))
 
-        # Top row: left + right (shrink to content)
-        top_row = tk.Frame(body, bg=BG)
-        top_row.pack(fill='x')
+        # === INFO BAR (compact, always visible) ===
+        info = tk.Frame(body, bg='#1a1d23')
+        info.pack(fill='x', pady=(0, 6))
+        info_cards = [
+            ('GPS', 'gps_stat', '🔍 等待'),
+            ('卫星', 'sat_stat', '—'),
+            ('精度', 'acc_stat', '—'),
+            ('坐标', 'pos_stat', '—'),
+            ('WiFi', 'wifi_stat', '—'),
+        ]
+        self.stat_lb = {}
+        for i, (label, key, default) in enumerate(info_cards):
+            f = tk.Frame(info, bg='#313244', highlightbackground='#45475a', highlightthickness=1)
+            f.pack(side='left', fill='x', expand=True, padx=(0 if i==0 else 2, 2))
+            tk.Label(f, text=label, font=('Segoe UI', 8), fg='#6c7086', bg='#313244', anchor='w').pack(fill='x', padx=8, pady=(4,0))
+            self.stat_lb[key] = tk.Label(f, text=default, font=('Consolas', 10, 'bold'), fg='#cdd6f4', bg='#313244', anchor='w')
+            self.stat_lb[key].pack(fill='x', padx=8, pady=(0, 4))
 
-        left = tk.Frame(top_row, bg=BG)
-        left.pack(side='left', fill='x', expand=True, padx=(0, 8))
-        right = tk.Frame(top_row, bg=BG)
-        right.pack(side='left', fill='x', expand=True, padx=(8, 0))
+        # === SATELLITE TABLE (MAIN FOCUS) ===
+        sat_frame = tk.Frame(body, bg='#1a1d23')
+        sat_frame.pack(fill='both', expand=True)
 
-        # GPS (left)
-        c = card(left, 'GPS 状态')
-        self.labels['gps'] = tk.Label(c, text='等待数据…', font=('Segoe UI', 28, 'bold'),
-                                       fg='#bbb', bg=CARD)
-        self.labels['gps'].pack(anchor='w')
-        self.labels['provider'] = tk.Label(c, text='', font=('Segoe UI', 9), fg=SECONDARY, bg=CARD)
-        self.labels['provider'].pack(anchor='w')
-
-        # Accuracy (left)
-        c = card(left, '定位精度')
-        self.labels['acc_val'] = tk.Label(c, text='-', font=('Segoe UI', 22, 'bold'),
-                                           fg=TEXT, bg=CARD)
-        self.labels['acc_val'].pack(anchor='w')
-        self.labels['acc_desc'] = tk.Label(c, text='', font=('Segoe UI', 9),
-                                            fg=SECONDARY, bg=CARD)
-        self.labels['acc_desc'].pack(anchor='w')
-        # Accuracy bar
-        self.acc_bar = tk.Canvas(c, height=6, bg='#e0e0e0', highlightthickness=0)
-        self.acc_bar.pack(fill='x', pady=(4, 0))
-        self.acc_bar_fill = self.acc_bar.create_rectangle(0, 0, 0, 6, width=0)
-
-        # Coordinates (left)
-        c = card(left, '坐标')
-        for key, name in [('lat', '纬度'), ('lon', '经度'), ('alt', '海拔')]:
-            r = tk.Frame(c, bg=CARD)
-            r.pack(fill='x', pady=1)
-            tk.Label(r, text=name, font=('Segoe UI', 9), fg=SECONDARY, bg=CARD,
-                     width=5, anchor='w').pack(side='left')
-            self.labels[key] = tk.Label(r, text='-', font=('Consolas', 12, 'bold'), fg=TEXT, bg=CARD)
-            self.labels[key].pack(side='left')
-
-        # WiFi (right)
-        c = card(right, 'WiFi 信号')
-        self.labels['wifi_ssid'] = tk.Label(c, text='-', font=('Consolas', 12, 'bold'), fg=TEXT, bg=CARD)
-        self.labels['wifi_ssid'].pack(anchor='w')
-        self.labels['wifi_rssi'] = tk.Label(c, text='-', font=('Segoe UI', 12), fg=SECONDARY, bg=CARD)
-        self.labels['wifi_rssi'].pack(anchor='w')
-        self.wbar = tk.Canvas(c, height=8, bg='#e0e0e0', highlightthickness=0)
-        self.wbar.pack(fill='x', pady=(4, 0))
-        self.wbar_fill = self.wbar.create_rectangle(0, 0, 0, 8, fill=ACCENT, width=0)
-
-        # Speed & Bearing (right)
-        c = card(right, '运动')
-        fr = tk.Frame(c, bg=CARD)
-        fr.pack(fill='x')
-        for key, name in [('speed', '速度'), ('bearing', '方向')]:
-            sub = tk.Frame(fr, bg=CARD)
-            sub.pack(side='left', fill='x', expand=True)
-            tk.Label(sub, text=name, font=('Segoe UI', 9), fg=SECONDARY, bg=CARD,
-                     anchor='w').pack(anchor='w')
-            self.labels[key] = tk.Label(sub, text='-', font=('Segoe UI', 20, 'bold'),
-                                         fg=TEXT, bg=CARD, anchor='w')
-            self.labels[key].pack(anchor='w')
-        self.labels['bearing_dir'] = tk.Label(c, text='', font=('Segoe UI', 9),
-                                               fg=SECONDARY, bg=CARD)
-        self.labels['bearing_dir'].pack(anchor='w')
-
-        # Connection & Export (right)
-        c = card(right, '连接')
-        self.labels['phone_ip'] = tk.Label(c, text='-', font=('Consolas', 10), fg=TEXT, bg=CARD)
-        self.labels['phone_ip'].pack(anchor='w')
-        self.labels['sats'] = tk.Label(c, text='-', font=('Segoe UI', 10), fg=TEXT, bg=CARD)
-        self.labels['sats'].pack(anchor='w', pady=(2, 0))
-
-        # Connection indicator
-        conn_status = tk.Frame(c, bg=CARD)
-        conn_status.pack(fill='x', pady=(4, 0))
-        self.conn_dot = tk.Canvas(conn_status, width=10, height=10, bg=CARD, highlightthickness=0)
-        self.conn_dot.pack(side='left', padx=(0, 6))
-        self.conn_dot_oval = self.conn_dot.create_oval(1, 1, 9, 9, fill='#bbb', outline='')
-        self.conn_label = tk.Label(conn_status, text='等待手机连接…', font=('Segoe UI', 9),
-                                    fg=SECONDARY, bg=CARD)
-        self.conn_label.pack(side='left')
-
-        self.data_status = tk.Label(c, text='', font=('Segoe UI', 9), fg=SECONDARY, bg=CARD)
-        self.data_status.pack(anchor='w')
-
-        btn_row = tk.Frame(c, bg=CARD)
-        btn_row.pack(fill='x', pady=(6, 0))
-        tk.Button(btn_row, text='📂 打开日志目录', command=open_logs,
-                  font=('Segoe UI', 9), bg='#f0f2f5', fg=TEXT, bd=1,
-                  relief='solid', cursor='hand2').pack(side='left', padx=(0, 6))
-        tk.Button(btn_row, text='⬇ 导出 GPX', command=self._export_gpx,
-                  font=('Segoe UI', 9), bg=ACCENT, fg='white', bd=0,
-                  cursor='hand2').pack(side='left')
-
-        # Satellite table (full)
-        sat_outer = tk.Frame(body, bg=BG)
-        sat_outer.pack(fill='both', expand=True, pady=(4, 0))
-        hdr = tk.Frame(sat_outer, bg=BG)
+        hdr = tk.Frame(sat_frame, bg='#1a1d23')
         hdr.pack(fill='x')
-        tk.Label(hdr, text='卫星 SNR', font=('Segoe UI', 9, 'bold'),
-                 fg=SECONDARY, bg=BG).pack(side='left')
-        self.sat_count_lb = tk.Label(hdr, text='', font=('Segoe UI', 9),
-                                      fg=SECONDARY, bg=BG)
-        self.sat_count_lb.pack(side='right')
+        tk.Label(hdr, text='🛰️  卫星信号 — SNR (dB-Hz)', font=('Segoe UI', 11, 'bold'), fg='#89b4fa', bg='#1a1d23').pack(side='left')
+        self.sat_cnt = tk.Label(hdr, text='', font=('Segoe UI', 9), fg='#6c7086', bg='#1a1d23')
+        self.sat_cnt.pack(side='right')
+        self.sat_cons = tk.Label(hdr, text='', font=('Segoe UI', 9), fg='#6c7086', bg='#1a1d23')
+        self.sat_cons.pack(side='right', padx=(0, 8))
 
-        cols = ('PRN', '星座', 'SNR (dB-Hz)', '信号强度', '使用')
-        self.tree = ttk.Treeview(sat_outer, columns=cols, show='headings',
-                                  height=7, selectmode='none')
-        for c in cols:
-            self.tree.heading(c, text=c)
-        self.tree.column('PRN', width=55, anchor='center')
-        self.tree.column('星座', width=60, anchor='center')
-        self.tree.column('SNR (dB-Hz)', width=90, anchor='e')
-        self.tree.column('信号强度', width=260)
-        self.tree.column('使用', width=55, anchor='center')
-        for tag, color in CONST_COLORS.items():
-            self.tree.tag_configure(tag, foreground=color)
-        self.tree.pack(fill='both', expand=True)
+        # Filter bar
+        fb = tk.Frame(sat_frame, bg='#1a1d23')
+        fb.pack(fill='x', pady=1)
+        tk.Label(fb, text='筛:', font=('Segoe UI', 8), fg='#585b70', bg='#1a1d23').pack(side='left', padx=(0,2))
+        self.filt = {}
+        self.afilt = set(CONST_C.keys())
+        for c in ['GPS','GLO','BDS','GAL','QZSS']:
+            cl = CONST_C.get(c,'#999')
+            lb = tk.Label(fb, text=f'●{c}', font=('Segoe UI', 8, 'bold'), fg=cl,
+                          bg='#45475a', cursor='hand2', padx=5, pady=1)
+            lb.pack(side='left', padx=1)
+            lb.bind('<Button-1>', lambda e, cc=c: self._tgl(cc))
+            self.filt[c] = lb
 
-        # Chart
-        chart_frame = tk.Frame(body, bg=BG)
-        chart_frame.pack(fill='x', pady=(6, 0))
-        tk.Label(chart_frame, text='WiFi 信号强度历史', font=('Segoe UI', 9, 'bold'),
-                 fg=SECONDARY, bg=BG).pack(anchor='w')
-        self.chart = tk.Canvas(chart_frame, height=60, bg=CARD,
-                                highlightbackground=BORDER, highlightthickness=1)
-        self.chart.pack(fill='x')
+        cols = ('#', '星座', 'SV', 'SNR', '信号条', '状态')
+        self.sat_tree = ttk.Treeview(sat_frame, columns=cols, show='headings', height=14, selectmode='none')
+        widths = [30, 55, 40, 55, 250, 50]
+        for c, w in zip(cols, widths):
+            self.sat_tree.heading(c, text=c)
+            self.sat_tree.column(c, width=w, anchor='center' if c != '信号条' else 'w')
+        # SNR color tags
+        self.sat_tree.tag_configure('ex', foreground='#099268')
+        self.sat_tree.tag_configure('gd', foreground='#2f9e44')
+        self.sat_tree.tag_configure('fa', foreground='#f08c00')
+        self.sat_tree.tag_configure('wk', foreground='#e8590c')
+        self.sat_tree.tag_configure('po', foreground='#e03131')
+        # Constellation color tags
+        for tag, color in CONST_C.items():
+            self.sat_tree.tag_configure(tag, foreground=color)
+        self.sat_tree.pack(fill='both', expand=True, pady=(2, 0))
 
-        # Status bar
-        status = tk.Frame(root, bg='#e8e8e8')
-        status.pack(fill='x', padx=16, pady=(6, 8))
-        self.status_lb = tk.Label(status, text='监听 0.0.0.0:3000', font=('Segoe UI', 8),
-                                   fg='#999', bg='#e8e8e8')
-        self.status_lb.pack()
+        # === Bottom row ===
+        bottom = tk.Frame(body, bg='#1a1d23')
+        bottom.pack(fill='x', pady=(6, 0))
 
-    def _export_gpx(self):
-        write_gpx()
-        self.status_lb.configure(text=f'GPX 已导出: {GPX_LOG}')
-        self.root.after(3000, lambda: self.status_lb.configure(
-            text='监听 0.0.0.0:3000'))
+        # WiFi + Chart (left)
+        b_left = tk.Frame(bottom, bg='#313244', highlightbackground='#45475a', highlightthickness=1)
+        b_left.pack(side='left', fill='both', expand=True, padx=(0, 3))
 
-    def _on_close(self):
-        write_gpx()
-        self.root.destroy()
+        tk.Label(b_left, text='📶 WiFi 信号', font=('Segoe UI', 9, 'bold'), fg='#a6adc8', bg='#313244',
+                 anchor='w').pack(fill='x', padx=10, pady=(5, 2))
+        self.wifi_lb = tk.Label(b_left, text='等待数据…', font=('Consolas', 10), fg='#cdd6f4', bg='#313244')
+        self.wifi_lb.pack(fill='x', padx=10)
+        self.wbar = tk.Canvas(b_left, height=6, bg='#45475a', highlightthickness=0)
+        self.wbar.pack(fill='x', padx=10, pady=(2, 4))
+        self._wf = self.wbar.create_rectangle(0, 0, 0, 6, width=0, fill='#a6e3a1')
 
-    def update(self):
+        self.chart = tk.Canvas(b_left, height=40, bg='#313244', highlightthickness=0)
+        self.chart.pack(fill='x', padx=10, pady=(0, 6))
+
+        # Connection (right)
+        b_right = tk.Frame(bottom, bg='#313244', highlightbackground='#45475a', highlightthickness=1)
+        b_right.pack(side='left', fill='x', padx=(3, 0))
+
+        tk.Label(b_right, text='🔗 连接', font=('Segoe UI', 9, 'bold'), fg='#a6adc8', bg='#313244',
+                 anchor='w').pack(fill='x', padx=10, pady=(5, 2))
+        self.conn_lb = tk.Label(b_right, text='等待手机…', font=('Consolas', 10), fg='#6c7086', bg='#313244')
+        self.conn_lb.pack(fill='x', padx=10)
+        self.count_lb = tk.Label(b_right, text='', font=('Consolas', 9), fg='#585b70', bg='#313244')
+        self.count_lb.pack(fill='x', padx=10, pady=(0, 2))
+
+        self.ip_lb = tk.Label(b_right, text='', font=('Consolas', 9), fg='#585b70', bg='#313244')
+        self.ip_lb.pack(fill='x', padx=10, pady=(0, 2))
+        self._show_ip()
+
+        btn_f = tk.Frame(b_right, bg='#313244')
+        btn_f.pack(fill='x', padx=10, pady=(2, 6))
+        for t, c in [('📂日志', lambda: os.startfile(LOG)), ('⬇GPX', write_gpx)]:
+            tk.Button(btn_f, text=t, command=c, font=('Segoe UI', 8), bd=0, cursor='hand2',
+                      bg='#45475a', fg='#cdd6f4', padx=6).pack(side='left', padx=1)
+
+        root.after(1500, self._srv_check)
+        self._ela()
+
+    def _ela(self):
+        e = (datetime.now() - start_t).seconds
+        h, m, s = e // 3600, e % 3600 // 60, e % 60
+        self.elapsed_lb.configure(text=f'⏱ {h:02d}:{m:02d}:{s:02d}')
+        self.root.after(1000, self._ela)
+
+    def _srv_check(self):
         try:
-            self._refresh()
-        except Exception as e:
-            print(f'Update: {e}')
-        finally:
-            self.root.after(500, self.update)
+            import urllib.request
+            d = json.loads(urllib.request.urlopen('http://localhost:3000/api/gps', data=b'{}', timeout=1).read())
+            self.srv_lb.configure(text=f'✓ {d["n"]}次', fg='#a6e3a1')
+            self.srv_dot.itemconfig(self._dot, fill='#a6e3a1')
+        except:
+            self.srv_lb.configure(text='✗ 离线', fg='#f38ba8')
+            self.srv_dot.itemconfig(self._dot, fill='#f38ba8')
+
+    def _show_ip(self):
+        ips = []
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            ips.append(s.getsockname()[0])
+            s.close()
+        except: pass
+        try:
+            import subprocess
+            out = subprocess.run(['ipconfig'], capture_output=True, text=True, timeout=5).stdout
+            for line in out.split('\n'):
+                if 'IPv4' in line and ':' in line:
+                    ip = line.split(':')[-1].strip()
+                    if ip and ip not in ips:
+                        ips.append(ip)
+        except: pass
+        if ips:
+            self.ip_lb.configure(text='🖥 ' + ' | '.join(ips))
+
+    def _tgl(self, c):
+        if c in self.afilt: self.afilt.discard(c)
+        else: self.afilt.add(c)
+        self._sat_key = ''  # force refresh
+        for k, lb in self.filt.items():
+            lb.configure(bg='#45475a' if k in self.afilt else '#1a1d23')
 
     def _refresh(self):
-        # Connection status (always show, even without GPS data)
-        with request_lock:
-            rc = request_count
-            lc = last_contact
-        if rc > 0:
-            elapsed = _time_mod.time() - lc
-            if elapsed < 5:
-                self.conn_dot.itemconfig(self.conn_dot_oval, fill='#4caf50')
-                self.conn_label.configure(text=f'已连接 ({rc} 次请求)')
-            else:
-                self.conn_dot.itemconfig(self.conn_dot_oval, fill='#ff9800')
-                self.conn_label.configure(text=f'上次连接 {elapsed:.0f}s 前 ({rc} 次)')
+        with lock:
+            d = dict(latest); n = count
+        sec = (datetime.now() - start_t).seconds
+        if n > 0:
+            self.conn_lb.configure(text=f'✅ 已连接 ({n}次)', fg='#a6e3a1')
+            rate = n / max(sec, 1)
+            self.count_lb.configure(text=f'{rate:.1f}次/秒 | {len(gpx_pts)}点')
         else:
-            self.conn_dot.itemconfig(self.conn_dot_oval, fill='#bbb')
-            self.conn_label.configure(text='等待手机连接…')
+            self.conn_lb.configure(text='⏳ 等待手机…', fg='#6c7086')
+        if not d: return
 
-        with data_lock:
-            d = dict(latest_data)
-        if not d:
-            self.dot.itemconfig(self.dot_oval, fill='#bbb')
-            return
-
-        self.dot.itemconfig(self.dot_oval, fill='#4caf50')
-        self.update_time_lb.configure(text=d.get('received_at', ''))
-
-        lat = d.get('latitude'); lon = d.get('longitude')
-        alt = d.get('altitude'); acc = d.get('accuracy')
+        lat, lon = d.get('latitude'), d.get('longitude')
+        prov = d.get('provider', ''); acc = d.get('accuracy')
         spd = d.get('speed'); brg = d.get('bearing')
-        sats_cnt = d.get('satellites', 0)
-        prov = d.get('provider', '')
-        rssi = d.get('wifi_rssi'); ssid = d.get('wifi_ssid', '')
+        sats = d.get('satellites', 0)
+        ssid = d.get('wifi_ssid', ''); rssi = d.get('wifi_rssi')
 
-        gps_fix = lat is not None and prov == 'gps' and (acc is None or acc < 100)
-        if gps_fix:
-            self.labels['gps'].configure(text='GPS 已定位 ✓', fg='#2e7d32')
-        elif lat:
-            self.labels['gps'].configure(text=f'{prov} 定位中… (精度 {acc:.0f}m)' if acc else f'{prov} 定位中…',
-                                         fg='#e65100')
-        else:
-            self.labels['gps'].configure(text='等待数据…', fg='#c62828')
-        self.labels['provider'].configure(text=f'来源: {prov}' if prov else '')
-
-        # Accuracy display
-        if acc:
-            self.labels['acc_val'].configure(
-                text=f'{acc:.1f} m',
-                fg='#2e7d32' if acc < 10 else '#e65100' if acc < 50 else '#c62828')
-            if acc < 3: desc = '极高精度 ✓'
-            elif acc < 10: desc = '高精度 ✓'
-            elif acc < 30: desc = '中等精度'
-            elif acc < 100: desc = '低精度 ⚠'
-            else: desc = '不可靠 ✗'
-            if sats_cnt: desc += f' | 卫星: {sats_cnt}'
-            self.labels['acc_desc'].configure(text=desc)
-
-            err_pct = max(0, min(100, 100 - acc * 2))
-            bw = max(self.acc_bar.winfo_width() - 2, 100)
-            self.acc_bar.coords(self.acc_bar_fill, 1, 1, 1 + int(bw * err_pct / 100), 5)
-            err_color = '#4caf50' if acc < 10 else '#ff9800' if acc < 50 else '#f44336'
-            self.acc_bar.itemconfig(self.acc_bar_fill, fill=err_color)
-        else:
-            self.labels['acc_val'].configure(text='-', fg=TEXT)
-            self.labels['acc_desc'].configure(text='')
-
-        for key, val in [('lat', f'{lat:.6f}°' if lat else '-'),
-                         ('lon', f'{lon:.6f}°' if lon else '-'),
-                         ('alt', f'{alt:.1f} m' if alt else '-')]:
-            self.labels[key].configure(text=val)
-
-        self.labels['speed'].configure(text=f'{spd:.1f}' if spd and spd > 0 else '0.0')
-        if brg:
-            idx = round(brg / 22.5) % 16
-            self.labels['bearing'].configure(text=f'{brg:.0f}°')
-            self.labels['bearing_dir'].configure(text=BEARING_NAMES[idx])
-        else:
-            self.labels['bearing'].configure(text='-°')
-            self.labels['bearing_dir'].configure(text='')
-
-        self.labels['wifi_ssid'].configure(text=ssid or '未连接')
+        # Info bar updates
+        gps_ok = lat and prov == 'gps'
+        gps_txt = '✅定位' if gps_ok else (f'{prov[:4]}…' if lat else '🔍搜索')
+        gps_c = '#a6e3a1' if gps_ok else ('#f9e2af' if lat else '#6c7086')
+        self.stat_lb['gps_stat'].configure(text=gps_txt, fg=gps_c)
+        self.stat_lb['sat_stat'].configure(text=f'{sats}颗' if sats else '0颗',
+                                           fg='#a6e3a1' if sats > 5 else '#f9e2af')
+        self.stat_lb['acc_stat'].configure(text=f'{acc:.0f}m' if acc else '—',
+                                           fg='#a6e3a1' if acc and acc < 10 else '#f9e2af' if acc and acc < 50 else '#6c7086')
+        self.stat_lb['pos_stat'].configure(text=f'{lat:.4f},{lon:.4f}' if lat else '—')
         if rssi:
-            pct = max(0, min(100, (rssi + 100) * 2.5))
-            color = '#2e7d32' if rssi >= -67 else '#e65100' if rssi >= -80 else '#c62828'
-            self.labels['wifi_rssi'].configure(text=f'{rssi} dBm  ({pct:.0f}%)', fg=color)
-            cw = max(self.wbar.winfo_width() - 2, 50)
-            self.wbar.coords(self.wbar_fill, 1, 1, 1 + int(cw * pct / 100), 7)
-            self.wbar.itemconfig(self.wbar_fill, fill=color)
+            self.stat_lb['wifi_stat'].configure(text=f'{rssi}dBm', fg=rssi_color(rssi))
+        elif ssid:
+            self.stat_lb['wifi_stat'].configure(text=ssid[:10])
         else:
-            self.labels['wifi_rssi'].configure(text='-', fg=SECONDARY)
+            self.stat_lb['wifi_stat'].configure(text='—')
 
-        self.labels['phone_ip'].configure(text=f'手机: {d.get("phone_ip", "-")}')
-        self.labels['sats'].configure(text=f'卫星: {sats_cnt} 锁定  |  {prov or "?"}')
-        self.data_status.configure(text=f'数据: {len(d)} 字段 | 更新: {d.get("received_at", "-")}')
+        # WiFi bar
+        if rssi:
+            pct = max(0, min(100, (rssi+100)*2.5))
+            w = max(self.wbar.winfo_width()-2, 50)
+            self.wbar.coords(self._wf, 1, 1, 1+int(w*pct/100), 5)
+            self.wbar.itemconfig(self._wf, fill=rssi_color(rssi))
+        self.wifi_lb.configure(text=f'{ssid}  {rssi} dBm' if rssi else ssid or '无数据')
 
-        # Sat table
-        raw = d.get('satellites_detail', [])
-        if not isinstance(raw, list): raw = []
-        sat_key = json.dumps(raw, sort_keys=True)
-        if sat_key != self._last_sat_key:
-            self._last_sat_key = sat_key
-            for row in self.tree.get_children(): self.tree.delete(row)
-            if raw:
+        # === SATELLITE TABLE (main feature) ===
+        raw = d.get('satellites_detail')
+        if raw and isinstance(raw, list):
+            sk = json.dumps([(x.get('svid'),x.get('cn0'),x.get('const'),x.get('used')) for x in raw])
+            if sk != self._sat_key:
+                self._sat_key = sk
+                for r in self.sat_tree.get_children(): self.sat_tree.delete(r)
                 used = sum(1 for s in raw if s.get('used'))
-                self.sat_count_lb.configure(text=f'{used}/{len(raw)} 锁定')
-                for s in sorted(raw, key=lambda x: x.get('cn0', 0), reverse=True):
+                total = len(raw)
+                # Constellation breakdown
+                cons = {}
+                for s in raw:
+                    c = s.get('const', '?')
+                    cons[c] = cons.get(c, 0) + 1
+                cons_txt = '  '.join([f'{k}={v}' for k, v in sorted(cons.items()) if k in self.afilt])
+                self.sat_cnt.configure(text=f'{used}/{total} 锁定')
+                self.sat_cons.configure(text=cons_txt)
+
+                filtered = [s for s in raw if s.get('const','?') in self.afilt]
+                for i, s in enumerate(sorted(filtered, key=lambda x: x.get('cn0', 0), reverse=True), 1):
                     cn0 = s.get('cn0', 0); const = s.get('const', '?')
                     svid = s.get('svid', '?'); used_f = s.get('used', False)
-                    bar_n = max(0, min(20, int(cn0 / 5)))
-                    bar_s = '█' * bar_n + '▁' * (20 - bar_n)
-                    self.tree.insert('', 'end', values=(
-                        f'{CONST_TAGS.get(const, "?")}{svid}',
-                        const, f'{cn0:.1f}', bar_s, '✓' if used_f else '○'
-                    ), tags=(const,))
-            else:
-                self.sat_count_lb.configure(text='')
+                    bar_n = max(0, min(40, int(cn0 * 0.8)))
+                    bar = '█' * bar_n + '░' * (40 - bar_n)
+                    used_t = '✓' if used_f else '○'
+                    snr_tag = 'ex' if cn0 >= 40 else 'gd' if cn0 >= 30 else 'fa' if cn0 >= 20 else 'wk' if cn0 >= 10 else 'po'
+                    self.sat_tree.insert('', 'end',
+                        values=(i, CONST_E.get(const, const), svid,
+                                f'{cn0:.1f}', bar, used_t),
+                        tags=(snr_tag, const))
+                # Update count to reflect filter
+                used_f = sum(1 for s in filtered if s.get('used'))
+                self.sat_cnt.configure(text=f'{used_f}/{len(filtered)} 锁定')
 
         # Chart
-        with rssi_lock:
-            hist = list(rssi_history)
-        if len(hist) != self._last_chart_len:
-            self._last_chart_len = len(hist)
+        if len(rssi_hist) != self._chart_n:
+            self._chart_n = len(rssi_hist)
             self.chart.delete('all')
-            if hist:
-                w = max(self.chart.winfo_width(), 100); h = 56
-                mn, mx = min(hist), max(hist); rng = max(mx - mn, 1)
+            h = list(rssi_hist)
+            if h:
+                w = max(self.chart.winfo_width(), 150); mn, mx = min(h), max(h); rg = max(mx-mn, 1)
                 pts = []
-                for i, v in enumerate(hist):
-                    x = 6 + (i / (len(hist) - 1)) * (w - 12) if len(hist) > 1 else w / 2
-                    y = (h - 10) * (1 - (v - mn) / rng) + 5
+                for i, v in enumerate(h):
+                    x = 4 + (i/(len(h)-1))*(w-8) if len(h) > 1 else w/2
+                    y = 34*(1-(v-mn)/rg)+3
                     pts.extend([x, y])
                 if pts:
-                    self.chart.create_line(*pts, fill=ACCENT, width=1.5, smooth=True)
-                    area = [6, h - 5] + pts + [w - 6, h - 5]
-                    self.chart.create_polygon(*area, fill=ACCENT, stipple='gray25', outline='')
+                    self.chart.create_line(*pts, fill='#89b4fa', width=1.5, smooth=True)
+                    self.chart.create_polygon(4, 37, *pts, w-4, 37, fill='#89b4fa', stipple='gray25', outline='')
 
-
-def start_server():
-    HTTPServer(('0.0.0.0', 3000), GPSHandler).serve_forever()
-
+    def update(self):
+        try: self._refresh()
+        except Exception as e: print(f'ERR: {e}')
+        finally: self.root.after(500, self.update)
 
 if __name__ == '__main__':
-    import sys
-    import time as _time
-    console = '--console' in sys.argv
-    test_mode = '--test' in sys.argv
-
-    # Kill old instances on port 3000
+    import sys, subprocess as sp
     try:
-        import subprocess
-        out = subprocess.check_output(
-            'netstat -ano | findstr ":3000 " | findstr LISTENING',
-            shell=True, text=True)
-        for line in out.strip().split('\n'):
-            parts = line.split()
-            if len(parts) >= 5:
-                pid = parts[4]
-                os.system(f'taskkill /F /PID {pid} >nul 2>&1')
+        out = sp.run(['netstat','-ano'], capture_output=True, text=True, timeout=5).stdout
+        for line in out.split('\n'):
+            if ':3000 ' in line and 'LISTENING' in line:
+                pid = line.strip().split()[-1]
+                if pid.isdigit(): sp.run(['taskkill','/F','/PID',pid], capture_output=True, timeout=5)
     except: pass
-
-    t = threading.Thread(target=start_server, daemon=True)
-    t.start()
-    print(f'GPS 服务器运行在 http://0.0.0.0:3000')
-
-    if test_mode:
-        print('测试模式: 生成模拟 GPS 数据…')
-        def mock_data():
-            import random, math
-            lat, lon = 31.83, 117.13
-            while True:
-                lat += random.uniform(-0.0005, 0.0005)
-                lon += random.uniform(-0.0005, 0.0005)
-                sats = random.randint(8, 18)
-                detail = []
-                for i in range(sats):
-                    detail.append({"svid": i+1, "cn0": random.uniform(15, 48),
-                                   "used": random.random() > 0.3,
-                                   "const": random.choice(["GPS","GLO","BDS","GAL"])})
-                d = {"latitude": lat, "longitude": lon, "altitude": random.uniform(10, 60),
-                     "accuracy": random.uniform(3, 12), "speed": random.uniform(0, 3),
-                     "bearing": random.uniform(0, 360), "satellites": sats,
-                     "satellites_detail": detail,
-                     "wifi_ssid": "TestWiFi", "wifi_rssi": random.randint(-85, -30),
-                     "wifi_frequency": 2412, "phone_ip": "192.168.137.2",
-                     "provider": "gps",
-                     "received_at": datetime.now().strftime('%H:%M:%S')}
-                with data_lock:
-                    latest_data.clear(); latest_data.update(d)
-                with rssi_lock:
-                    rssi_history.append(d["wifi_rssi"])
-                _time.sleep(1)
-        threading.Thread(target=mock_data, daemon=True).start()
-
-    if console:
-        print('控制台模式，按 Ctrl+C 停止')
-        try:
-            while True: _time.sleep(1)
-        except KeyboardInterrupt: print('已停止')
+    srv = HTTPServer(('0.0.0.0', 3000), Handler); srv.allow_reuse_address = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print('Server on http://0.0.0.0:3000')
+    if '--console' in sys.argv:
+        while True: import time; time.sleep(1)
     else:
-        try:
-            root = tk.Tk()
-            GPSMonitor(root)
-            root.mainloop()
-        except Exception as e:
-            print(f'GUI 启动失败: {e}，已切换控制台模式')
-            try:
-                while True: _time.sleep(1)
-            except KeyboardInterrupt: print('已停止')
+        root = tk.Tk(); App(root).update(); root.mainloop()
+    write_gpx()

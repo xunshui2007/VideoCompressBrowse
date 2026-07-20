@@ -35,4 +35,7 @@ Thumbs.db
 __pycache__/
 *.pyc
 gps_desktop/logs/
+gps_desktop/build/
+gps_desktop/*.spec
+gps_desktop/*.exe
 
