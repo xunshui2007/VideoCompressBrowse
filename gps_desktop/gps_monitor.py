@@ -1,8 +1,12 @@
-import json, os, threading, tkinter as tk
+import json, os, sys, threading, tkinter as tk
 from tkinter import ttk
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from collections import deque
+
+def icon_path():
+    base = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
+    return os.path.join(base, 'gps_icon.ico')
 
 latest = {}; lock = threading.Lock(); count = 0; start_t = datetime.now()
 rssi_hist = deque(maxlen=120); gpx_pts = []
@@ -64,6 +68,8 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(f'GPS 信号监测 — {os.path.basename(GPX)}')
+        try: root.iconbitmap(icon_path())
+        except: pass
         root.geometry('860x700+80+10')
         root.configure(bg='#1a1d23'); root.minsize(700, 540)
         self._sat_key = ''; self._chart_n = 0; self.lb = {}
