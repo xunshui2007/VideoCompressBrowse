@@ -229,7 +229,9 @@ class GPSMonitor:
     def _card(self, parent, title, **pack_opts):
         f = tk.Frame(parent, bg='white', bd=0, highlightthickness=1,
                      highlightcolor='#e0e0e0', highlightbackground='#e0e0e0')
-        f.pack(fill='x', pady=(0, 6), **pack_opts)
+        opts = {'fill': 'x', 'pady': (0, 6)}
+        opts.update(pack_opts)
+        f.pack(**opts)
         tk.Label(f, text=title, font=('Segoe UI', 10, 'bold'),
                  fg='#555', bg='white', anchor='w').pack(fill='x', padx=12, pady=(8, 4))
         c = tk.Frame(f, bg='white')
