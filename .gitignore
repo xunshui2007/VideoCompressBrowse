@@ -4,6 +4,11 @@ android/build/
 android/app/build/
 android/local.properties
 android/.idea/
+gps_app/.gradle/
+gps_app/build/
+gps_app/app/build/
+gps_app/local.properties
+gps_app/.idea/
 *.iml
 
 # Electron (cleaned up)
@@ -25,4 +30,8 @@ Thumbs.db
 
 # Secrets
 *.txt
+
+# Python
+__pycache__/
+*.pyc
 
