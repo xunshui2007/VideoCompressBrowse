@@ -421,7 +421,9 @@ def start_server():
 
 if __name__ == '__main__':
     import sys
+    import time as _time
     console = '--console' in sys.argv
+    test_mode = '--test' in sys.argv
 
     # Kill old instances on port 3000
     try:
@@ -439,10 +441,40 @@ if __name__ == '__main__':
     t = threading.Thread(target=start_server, daemon=True)
     t.start()
     print(f'GPS 服务器运行在 http://0.0.0.0:3000')
+
+    if test_mode:
+        print('测试模式: 生成模拟 GPS 数据…')
+        def mock_data():
+            import random, math
+            lat, lon = 31.83, 117.13
+            while True:
+                lat += random.uniform(-0.0005, 0.0005)
+                lon += random.uniform(-0.0005, 0.0005)
+                sats = random.randint(8, 18)
+                detail = []
+                for i in range(sats):
+                    detail.append({"svid": i+1, "cn0": random.uniform(15, 48),
+                                   "used": random.random() > 0.3,
+                                   "const": random.choice(["GPS","GLO","BDS","GAL"])})
+                d = {"latitude": lat, "longitude": lon, "altitude": random.uniform(10, 60),
+                     "accuracy": random.uniform(3, 12), "speed": random.uniform(0, 3),
+                     "bearing": random.uniform(0, 360), "satellites": sats,
+                     "satellites_detail": detail,
+                     "wifi_ssid": "TestWiFi", "wifi_rssi": random.randint(-85, -30),
+                     "wifi_frequency": 2412, "phone_ip": "192.168.137.2",
+                     "provider": "gps",
+                     "received_at": datetime.now().strftime('%H:%M:%S')}
+                with data_lock:
+                    latest_data.clear(); latest_data.update(d)
+                with rssi_lock:
+                    rssi_history.append(d["wifi_rssi"])
+                _time.sleep(1)
+        threading.Thread(target=mock_data, daemon=True).start()
+
     if console:
         print('控制台模式，按 Ctrl+C 停止')
         try:
-            while True: import time; time.sleep(1)
+            while True: _time.sleep(1)
         except KeyboardInterrupt: print('已停止')
     else:
         try:
@@ -452,5 +484,5 @@ if __name__ == '__main__':
         except Exception as e:
             print(f'GUI 启动失败: {e}，已切换控制台模式')
             try:
-                while True: import time; time.sleep(1)
+                while True: _time.sleep(1)
             except KeyboardInterrupt: print('已停止')
