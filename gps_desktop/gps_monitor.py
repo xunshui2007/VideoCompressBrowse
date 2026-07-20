@@ -4,9 +4,18 @@ import tkinter as tk
 from tkinter import ttk
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
+from collections import deque
 
 latest_data = {}
 data_lock = threading.Lock()
+rssi_history = deque(maxlen=120)
+rssi_lock = threading.Lock()
+
+CONST_COLORS = {
+    'GPS': '#4caf50', 'GLO': '#ff9800', 'BDS': '#f44336',
+    'GAL': '#2196f3', 'QZSS': '#9c27b0', 'IRN': '#795548',
+    'SBAS': '#607d8b', '?': '#999'
+}
 
 class GPSHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -21,6 +30,10 @@ class GPSHandler(BaseHTTPRequestHandler):
             d['received_at'] = datetime.now().strftime('%H:%M:%S')
             latest_data.clear()
             latest_data.update(d)
+        with rssi_lock:
+            rssi = d.get('wifi_rssi')
+            if rssi is not None:
+                rssi_history.append(rssi)
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
@@ -46,164 +59,281 @@ class GPSMonitor:
     def __init__(self, root):
         self.root = root
         root.title("GPS 实时监测")
-        root.geometry("760x600+100+100")
+        root.geometry("880x680+100+50")
         root.configure(bg='#f0f2f5')
+        root.minsize(720, 500)
+
+        self.sat_tree = None
+        self.fix_indicator = None
 
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure('Card.TFrame', background='white', relief='solid', borderwidth=0)
-        style.configure('Title.TLabel', background='white', font=('Segoe UI', 12, 'bold'), foreground='#333')
-        style.configure('Label.TLabel', background='white', font=('Segoe UI', 10), foreground='#888')
-        style.configure('Value.TLabel', background='white', font=('Segoe UI', 10, 'bold'), foreground='#333')
-        style.configure('Mono.TLabel', background='white', font=('Consolas', 10, 'bold'), foreground='#333')
-        style.configure('Green.TLabel', background='white', font=('Segoe UI', 14, 'bold'), foreground='#4caf50')
-        style.configure('Red.TLabel', background='white', font=('Segoe UI', 14, 'bold'), foreground='#f44336')
-        style.configure('Orange.TLabel', background='white', font=('Segoe UI', 14, 'bold'), foreground='#ff9800')
-        style.configure('Header.TLabel', font=('Segoe UI', 16, 'bold'), foreground='#1a73e8', background='#f0f2f5')
+        for c in ['#f0f2f5', '#4caf50', '#f44336', '#ff9800', '#333', '#888', '#1a73e8', 'white']:
+            style.configure(c, background=c) if c != 'white' else None
 
-        # Header
-        header = ttk.Label(root, text="GPS 实时监测", style='Header.TLabel')
-        header.pack(pady=(12, 8))
+        # === Header ===
+        header = tk.Frame(root, bg='#f0f2f5')
+        header.pack(fill='x', padx=16, pady=(12, 6))
+        tk.Label(header, text='GPS 实时监测', font=('Segoe UI', 18, 'bold'),
+                 fg='#1a73e8', bg='#f0f2f5').pack(side='left')
 
-        main_frame = ttk.Frame(root, style='Card.TFrame')
-        main_frame.pack(fill='both', expand=True, padx=12, pady=(0, 12))
+        self.status_dot = tk.Canvas(header, width=16, height=16, bg='#f0f2f5',
+                                     highlightthickness=0)
+        self.status_dot.pack(side='right', padx=(4, 0))
+        self._dot = self.status_dot.create_oval(1, 1, 15, 15, fill='#ccc', outline='')
 
-        # Canvas + Scrollbar for scrollable content
-        canvas = tk.Canvas(main_frame, bg='white', highlightthickness=0)
-        scrollbar = ttk.Scrollbar(main_frame, orient='vertical', command=canvas.yview)
-        scroll_frame = ttk.Frame(canvas, style='Card.TFrame')
+        # === Scrollable content ===
+        canvas = tk.Canvas(root, bg='#f0f2f5', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(root, orient='vertical', command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg='#f0f2f5')
 
-        scroll_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        scroll_frame.bind('<Configure>',
+                          lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
         canvas.create_window((0, 0), window=scroll_frame, anchor='nw')
-        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.configure(yscrollcommand=scrollbar.set, width=880)
 
-        canvas.pack(side='left', fill='both', expand=True)
-        scrollbar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True, padx=(16, 0))
+        scrollbar.pack(side='right', fill='y', padx=(0, 16))
 
-        # GPS Status
-        f1 = ttk.LabelFrame(scroll_frame, text='GPS 状态', padding=10)
-        f1.pack(fill='x', padx=10, pady=(10, 4))
-        self.gps_status = ttk.Label(f1, text='等待数据…', style='Orange.TLabel')
-        self.gps_status.pack(anchor='w')
-        self.gps_provider = ttk.Label(f1, text='', style='Label.TLabel')
-        self.gps_provider.pack(anchor='w')
+        # === Top row: two columns ===
+        top = tk.Frame(scroll_frame, bg='#f0f2f5')
+        top.pack(fill='x')
 
-        # Coordinates
-        f2 = ttk.LabelFrame(scroll_frame, text='坐标', padding=10)
-        f2.pack(fill='x', padx=10, pady=4)
-        grid2 = ttk.Frame(f2)
-        grid2.pack(fill='x')
-        self.labels2 = {}
-        fields = [('纬度', 'latitude', '°'), ('经度', 'longitude', '°'),
-                  ('海拔', 'altitude', ' m'), ('精度', 'accuracy', ' m'),
-                  ('速度', 'speed', ' m/s'), ('方向', 'bearing', '°')]
-        for i, (label, key, unit) in enumerate(fields):
-            r, c = divmod(i, 2)
-            frame = ttk.Frame(grid2)
-            frame.grid(row=r, column=c, sticky='ew', padx=(0, 20), pady=2)
-            grid2.columnconfigure(c, weight=1)
-            ttk.Label(frame, text=label + '：', style='Label.TLabel').pack(side='left')
-            self.labels2[key] = ttk.Label(frame, text='-', style='Mono.TLabel')
-            self.labels2[key].pack(side='left')
+        # Left: GPS Status card
+        gps_card = self._card(top, 'GPS 状态')
+        gps_card.pack(side='left', fill='both', expand=True, padx=(0, 6))
+        self.gps_text = tk.Label(gps_card, text='等待数据…',
+                                  font=('Segoe UI', 22, 'bold'), fg='#ff9800', bg='white')
+        self.gps_text.pack(anchor='w', pady=(0, 2))
+        self.provider_text = tk.Label(gps_card, text='', font=('Segoe UI', 10),
+                                       fg='#888', bg='white')
+        self.provider_text.pack(anchor='w')
+        self.sat_count_text = tk.Label(gps_card, text='卫星: - / -',
+                                        font=('Segoe UI', 10), fg='#555', bg='white')
+        self.sat_count_text.pack(anchor='w', pady=(4, 0))
 
-        # WiFi
-        f3 = ttk.LabelFrame(scroll_frame, text='WiFi 信息', padding=10)
-        f3.pack(fill='x', padx=10, pady=4)
-        self.wifi_ssid = ttk.Label(f3, text='-', style='Mono.TLabel')
-        self.wifi_ssid.pack(anchor='w')
-        self.wifi_rssi = ttk.Label(f3, text='-', style='Mono.TLabel')
-        self.wifi_rssi.pack(anchor='w')
-        self.wifi_freq = ttk.Label(f3, text='-', style='Mono.TLabel')
-        self.wifi_freq.pack(anchor='w')
+        # Right: Coordinates card
+        coord_card = self._card(top, '坐标')
+        coord_card.pack(side='left', fill='both', expand=True, padx=(6, 0))
+        self.coord_labels = {}
+        for label, key in [('纬度', 'latitude'), ('经度', 'longitude'),
+                            ('海拔', 'altitude'), ('精度', 'accuracy')]:
+            r = tk.Frame(coord_card, bg='white')
+            r.pack(fill='x', pady=1)
+            tk.Label(r, text=label, font=('Segoe UI', 9), fg='#888', bg='white',
+                     width=5, anchor='w').pack(side='left')
+            self.coord_labels[key] = tk.Label(r, text='-',
+                font=('Consolas', 11, 'bold'), fg='#333', bg='white')
+            self.coord_labels[key].pack(side='left')
 
-        # Satellite SNR Table
-        f4 = ttk.LabelFrame(scroll_frame, text='卫星 SNR', padding=10)
-        f4.pack(fill='x', padx=10, pady=4)
-        self.sat_frame = ttk.Frame(f4)
-        self.sat_frame.pack(fill='x')
-        self.sat_header = ttk.Label(self.sat_frame, text='等待数据…', style='Label.TLabel')
-        self.sat_header.pack(anchor='w')
+        # === Speed + Bearing row ===
+        mid = tk.Frame(scroll_frame, bg='#f0f2f5')
+        mid.pack(fill='x', pady=(6, 0))
 
-        # Connection Info
-        f5 = ttk.LabelFrame(scroll_frame, text='连接信息', padding=10)
-        f5.pack(fill='x', padx=10, pady=(4, 10))
-        self.phone_ip = ttk.Label(f5, text='-', style='Mono.TLabel')
-        self.phone_ip.pack(anchor='w')
-        self.last_update = ttk.Label(f5, text='-', style='Label.TLabel')
-        self.last_update.pack(anchor='w')
-        self.server_info = ttk.Label(f5, text='监听 0.0.0.0:3000  ← 手机填此 IP', style='Label.TLabel')
-        self.server_info.pack(anchor='w', pady=(4, 0))
+        speed_card = self._card(mid, '速度')
+        speed_card.pack(side='left', fill='both', expand=True, padx=(0, 6))
+        self.speed_text = tk.Label(speed_card, text='0.0',
+                                    font=('Segoe UI', 20, 'bold'), fg='#333', bg='white')
+        self.speed_text.pack(anchor='w')
+        tk.Label(speed_card, text='m/s', font=('Segoe UI', 9),
+                 fg='#888', bg='white').pack(anchor='w')
+
+        bear_card = self._card(mid, '方向')
+        bear_card.pack(side='left', fill='both', expand=True, padx=(6, 0))
+        self.bearing_text = tk.Label(bear_card, text='-',
+                                      font=('Segoe UI', 20, 'bold'), fg='#333', bg='white')
+        self.bearing_text.pack(anchor='w')
+        self.bearing_dir = tk.Label(bear_card, text='',
+                                     font=('Segoe UI', 10), fg='#888', bg='white')
+        self.bearing_dir.pack(anchor='w')
+
+        # === WiFi card ===
+        wifi_card = self._card(scroll_frame, 'WiFi 信号')
+        wifi_card.pack(fill='x', pady=(6, 0))
+        wifi_grid = tk.Frame(wifi_card, bg='white')
+        wifi_grid.pack(fill='x')
+        self.wifi_ssid_text = tk.Label(wifi_grid, text='-', font=('Consolas', 11, 'bold'),
+                                        fg='#333', bg='white')
+        self.wifi_ssid_text.pack(side='left', padx=(0, 20))
+        self.wifi_rssi_text = tk.Label(wifi_grid, text='-', font=('Consolas', 11, 'bold'),
+                                        fg='#888', bg='white')
+        self.wifi_rssi_text.pack(side='left', padx=(0, 20))
+        self.wifi_freq_text = tk.Label(wifi_grid, text='-', font=('Segoe UI', 9),
+                                        fg='#888', bg='white')
+        self.wifi_freq_text.pack(side='left')
+
+        # WiFi signal bar (canvas)
+        self.wifi_bar = tk.Canvas(wifi_card, height=14, bg='#eee',
+                                   highlightthickness=0)
+        self.wifi_bar.pack(fill='x', pady=(6, 0))
+        self._wifi_fill = self.wifi_bar.create_rectangle(0, 0, 0, 14,
+                                                          fill='#ccc', width=0)
+
+        # === RSSI History chart ===
+        chart_card = self._card(scroll_frame, '信号强度历史 (最近 120 秒)')
+        chart_card.pack(fill='x', pady=(6, 0))
+        self.chart = tk.Canvas(chart_card, height=80, bg='white',
+                                highlightthickness=0)
+        self.chart.pack(fill='x')
+
+        # === Satellite table ===
+        sat_card = self._card(scroll_frame, '卫星 SNR')
+        sat_card.pack(fill='x', pady=(6, 0))
+        self.sat_count_label = tk.Label(sat_card, text='等待数据…',
+                                         font=('Segoe UI', 9), fg='#888', bg='white')
+        self.sat_count_label.pack(anchor='w', pady=(0, 4))
+
+        cols = ('PRN', '星座', 'SNR', '信号', '状态')
+        self.sat_tree = ttk.Treeview(sat_card, columns=cols, show='headings',
+                                      height=8, selectmode='none')
+        for c in cols:
+            self.sat_tree.heading(c, text=c)
+        self.sat_tree.column('PRN', width=50, anchor='center')
+        self.sat_tree.column('星座', width=50, anchor='center')
+        self.sat_tree.column('SNR', width=80, anchor='e')
+        self.sat_tree.column('信号', width=200)
+        self.sat_tree.column('状态', width=70, anchor='center')
+        self.sat_tree.pack(fill='x')
+
+        # === Connection info ===
+        conn_card = self._card(scroll_frame, '连接信息')
+        conn_card.pack(fill='x', pady=(6, 16))
+        self.phone_ip_text = tk.Label(conn_card, text='-',
+                                       font=('Consolas', 10), fg='#333', bg='white')
+        self.phone_ip_text.pack(anchor='w')
+        self.last_upd_text = tk.Label(conn_card, text='-',
+                                       font=('Segoe UI', 9), fg='#888', bg='white')
+        self.last_upd_text.pack(anchor='w', pady=(2, 0))
+
+    def _card(self, parent, title):
+        f = tk.Frame(parent, bg='white', bd=0, highlightthickness=1,
+                     highlightcolor='#e0e0e0', highlightbackground='#e0e0e0')
+        tk.Label(f, text=title, font=('Segoe UI', 10, 'bold'),
+                 fg='#555', bg='white', anchor='w').pack(fill='x', padx=12, pady=(8, 4))
+        c = tk.Frame(f, bg='white')
+        c.pack(fill='x', padx=12, pady=(0, 10))
+        return c
+
+    def _bearing_name(self, deg):
+        dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+        if deg is None: return ''
+        idx = round(deg / 22.5) % 16
+        return f'({dirs[idx]})'
 
     def update(self):
         with data_lock:
             d = dict(latest_data)
         if not d:
+            self.status_dot.itemconfig(self._dot, fill='#ccc')
             self.root.after(500, self.update)
             return
+
+        self.status_dot.itemconfig(self._dot, fill='#4caf50')
 
         loc = d.get('latitude') is not None
         gps_ok = loc and (d.get('accuracy') is None or d['accuracy'] < 100)
 
         if gps_ok:
-            self.gps_status.configure(text='已定位 ✓', style='Green.TLabel')
+            self.gps_text.configure(text='已定位 ✓', fg='#4caf50')
         elif loc:
-            self.gps_status.configure(text='定位中…', style='Orange.TLabel')
+            self.gps_text.configure(text='定位中…', fg='#ff9800')
         else:
-            self.gps_status.configure(text='无信号', style='Red.TLabel')
-        self.gps_provider.configure(text=f'来源: {d.get("provider", "?")}')
+            self.gps_text.configure(text='无信号', fg='#f44336')
+        self.provider_text.configure(text=f'来源: {d.get("provider", "?")}')
 
-        for key, label in self.labels2.items():
-            val = d.get(key)
-            if val is not None:
-                label.configure(text=f'{val:.6f}' if isinstance(val, float) and key in ('latitude', 'longitude')
-                                else f'{val:.1f}' if isinstance(val, float)
-                                else str(val))
-            else:
-                label.configure(text='-')
+        sats = d.get('satellites_detail', [])
+        total_sats = d.get('satellites', 0)
+        total_visible = len(sats) if sats else 0
+        self.sat_count_text.configure(text=f'卫星: {total_sats} 锁定 / {total_visible} 可见')
 
-        self.wifi_ssid.configure(text=f'SSID: {d.get("wifi_ssid", "-")}')
+        for key, label in self.coord_labels.items():
+            v = d.get(key)
+            label.configure(text=f'{v:.6f}' if isinstance(v, float) and key in ('latitude', 'longitude')
+                            else f'{v:.1f} m' if isinstance(v, float) and key == 'altitude'
+                            else f'{v:.1f} m' if isinstance(v, float) and key == 'accuracy'
+                            else '-')
+
+        spd = d.get('speed', 0)
+        self.speed_text.configure(text=f'{spd:.1f}' if isinstance(spd, (int, float)) else '-')
+
+        brg = d.get('bearing')
+        if isinstance(brg, (int, float)):
+            self.bearing_text.configure(text=f'{brg:.0f}°')
+            self.bearing_dir.configure(text=self._bearing_name(brg))
+        else:
+            self.bearing_text.configure(text='-')
+            self.bearing_dir.configure(text='')
+
+        # WiFi
+        ssid = d.get('wifi_ssid', '-')
+        self.wifi_ssid_text.configure(text=f'{ssid}')
         rssi = d.get('wifi_rssi')
         if rssi is not None:
             pct = max(0, min(100, (rssi + 100) * 2.5))
             color = '#4caf50' if rssi >= -67 else '#ff9800' if rssi >= -80 else '#f44336'
-            self.wifi_rssi.configure(text=f'信号: {rssi} dBm ({pct:.0f}%)', foreground=color)
+            self.wifi_rssi_text.configure(text=f'{rssi} dBm  ({pct:.0f}%)', fg=color)
+            cw = self.wifi_bar.winfo_width() - 2 or 200
+            self.wifi_bar.coords(self._wifi_fill, 1, 1, 1 + int(cw * pct / 100), 13)
+            self.wifi_bar.itemconfig(self._wifi_fill, fill=color)
         else:
-            self.wifi_rssi.configure(text='信号: -', foreground='#333')
-        self.wifi_freq.configure(text=f'频率: {d.get("wifi_frequency", "-")} MHz')
+            self.wifi_rssi_text.configure(text='-', fg='#888')
+        self.wifi_freq_text.configure(text=f'{d.get("wifi_frequency", "-")} MHz')
+
+        # RSSI history chart
+        with rssi_lock:
+            hist = list(rssi_history)
+        if hist:
+            w = self.chart.winfo_width() or 600
+            h = 78
+            self.chart.delete('all')
+            self.chart.create_line(5, h - 5, w - 5, h - 5, fill='#eee', width=1)
+            mn, mx = min(hist), max(hist)
+            rng = max(mx - mn, 1)
+            pts = []
+            for i, v in enumerate(hist):
+                x = 5 + (i / max(len(hist) - 1, 1)) * (w - 10)
+                y = (h - 10) * (1 - (v - mn) / rng) + 5
+                pts.extend([x, y])
+            if len(pts) >= 4:
+                self.chart.create_line(*pts, fill='#1a73e8', width=1.5, smooth=True)
+                # Fill area
+                area_pts = [5, h - 5] + pts + [w - 10, h - 5]
+                self.chart.create_polygon(*area_pts, fill='#1a73e8', stipple='gray25', outline='')
 
         # Satellite table
-        sats = d.get('satellites_detail', [])
-        if sats and len(sats) > 0:
-            used = sum(1 for s in sats if s.get('used'))
-            for w in self.sat_frame.winfo_children():
-                w.destroy()
-            ttk.Label(self.sat_frame, text=f'{used}/{len(sats)} 锁定', style='Label.TLabel').pack(anchor='w', pady=(0, 4))
-            # Table header
-            hdr = ttk.Frame(self.sat_frame)
-            hdr.pack(fill='x')
-            for text, w in [('PRN', 50), ('星座', 50), ('SNR', 120), ('状态', 60)]:
-                ttk.Label(hdr, text=text, style='Label.TLabel', width=w//7).pack(side='left')
-            for s in sats:
-                row = ttk.Frame(self.sat_frame)
-                row.pack(fill='x', pady=1)
-                const = s.get('const', '?')
-                cn0 = s.get('cn0', 0)
-                used_flag = s.get('used', False)
-                snr_color = '#4caf50' if cn0 >= 40 else '#ff9800' if cn0 >= 25 else '#f44336'
-                ttk.Label(row, text=str(s.get('svid', '?')), style='Mono.TLabel', width=7).pack(side='left')
-                ttk.Label(row, text=const, style='Mono.TLabel', width=7).pack(side='left')
-                ttk.Label(row, text=f'{cn0:.1f} dB-Hz', foreground=snr_color,
-                          font=('Consolas', 9, 'bold'), background='white').pack(side='left')
-                ttk.Label(row, text='✓ 使用' if used_flag else '○ 搜索',
-                          foreground='#4caf50' if used_flag else '#999',
-                          font=('Segoe UI', 9), background='white').pack(side='left')
-        else:
-            for w in self.sat_frame.winfo_children():
-                w.destroy()
-            ttk.Label(self.sat_frame, text='无卫星数据', style='Label.TLabel').pack(anchor='w')
+        if self.sat_tree:
+            for row in self.sat_tree.get_children():
+                self.sat_tree.delete(row)
+            if sats and len(sats) > 0:
+                used = sum(1 for s in sats if s.get('used'))
+                self.sat_count_label.configure(text=f'{used}/{len(sats)} 锁定')
+                for s in sorted(sats, key=lambda x: x.get('cn0', 0), reverse=True):
+                    cn0 = s.get('cn0', 0)
+                    const = s.get('const', '?')
+                    svid = s.get('svid', '?')
+                    used_f = '✓' if s.get('used', False) else '○'
+                    cc = CONST_COLORS.get(const, '#999')
 
-        self.phone_ip.configure(text=f'手机 IP: {d.get("phone_ip", "-")}')
-        self.last_update.configure(text=f'最后更新: {d.get("received_at", "-")}')
+                    # Signal bar
+                    bar_pct = max(0, min(100, cn0 * 2.5))
+                    bar_color = '#4caf50' if cn0 >= 40 else '#ff9800' if cn0 >= 25 else '#f44336'
+
+                    self.sat_tree.insert('', 'end', values=(
+                        svid,
+                        f'{const}',
+                        f'{cn0:.1f}',
+                        f'{"█" * int(bar_pct / 10)}{"▒" * (10 - int(bar_pct / 10))}',
+                        used_f
+                    ), tags=(const,))
+                # Color rows by constellation
+                for c in CONST_COLORS:
+                    self.sat_tree.tag_configure(c, foreground=CONST_COLORS[c])
+            else:
+                self.sat_count_label.configure(text='无卫星数据')
+
+        self.phone_ip_text.configure(text=f'手机 IP: {d.get("phone_ip", "-")}')
+        self.last_upd_text.configure(text=f'最后更新: {d.get("received_at", "-")}')
 
         self.root.after(500, self.update)
 
