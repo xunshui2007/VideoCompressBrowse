@@ -37,7 +37,8 @@ data class SatelliteInfo(
     val svid: Int,
     val cn0: Float,
     val usedInFix: Boolean,
-    val constellation: String
+    val constellation: String,
+    val frequencyHz: Float = 0f
 )
 
 class MainActivity : AppCompatActivity() {

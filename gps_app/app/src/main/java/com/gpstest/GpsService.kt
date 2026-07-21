@@ -101,6 +101,7 @@ class GpsService : Service() {
                 for (i in 0 until status.satelliteCount) {
                     val u = status.usedInFix(i)
                     if (u) used++
+                    val freq = status.getCarrierFrequencyHz(i)
                     list.add(SatelliteInfo(status.getSvid(i), status.getCn0DbHz(i), u,
                         when (status.getConstellationType(i)) {
                             GnssStatus.CONSTELLATION_GPS -> "GPS"
@@ -111,7 +112,7 @@ class GpsService : Service() {
                             GnssStatus.CONSTELLATION_IRNSS -> "IRN"
                             GnssStatus.CONSTELLATION_SBAS -> "SBAS"
                             else -> "?"
-                        }))
+                        }, freq))
                 }
                 satellites = list.sortedByDescending { it.cn0 }
                 satelliteCount = used
@@ -139,7 +140,11 @@ class GpsService : Service() {
                 put("timestamp", System.currentTimeMillis())
                 put("satellites", satelliteCount)
                 put("satellites_detail", JSONArray(satellites.map {
-                    JSONObject().apply { put("svid", it.svid); put("cn0", it.cn0.toDouble()); put("used", it.usedInFix); put("const", it.constellation) }
+                    JSONObject().apply {
+                        put("svid", it.svid); put("cn0", it.cn0.toDouble())
+                        put("used", it.usedInFix); put("const", it.constellation)
+                        if (it.frequencyHz > 0) put("freq", it.frequencyHz.toDouble())
+                    }
                 }))
                 if (loc != null) {
                     put("latitude", loc.latitude); put("longitude", loc.longitude)
